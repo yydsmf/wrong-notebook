@@ -336,7 +336,7 @@ describe('/api/error-items', () => {
             expect(mocks.mockPrismaErrorItem.create).toHaveBeenCalledTimes(1);
         });
 
-        it('保存配图前净化 SVG；有有效配图时标记为有配图', async () => {
+        it('识题导入不再自动保存 SVG 配图，但保留配图判断结果', async () => {
             mocks.mockPrismaErrorItem.create.mockResolvedValue({ id: 'error-item-1', userId: 'user-123' });
             const figureSvg = '<svg viewBox="0 0 10 10" onload="alert(1)"><script>alert(1)</script><rect width="5" height="5"/></svg>';
 
@@ -346,12 +346,11 @@ describe('/api/error-items', () => {
             }));
 
             const data = mocks.mockPrismaErrorItem.create.mock.calls[0][0].data;
-            expect(data.hasFigure).toBe(true);
-            expect(data.figureSvg).toContain('<rect');
-            expect(data.figureSvg).not.toMatch(/script|onload/);
+            expect(data.hasFigure).toBe(false);
+            expect(data.figureSvg).toBeNull();
         });
 
-        it('无效 SVG 丢弃，未提供配图时 hasFigure 为 false', async () => {
+        it('识题导入不接受 SVG 字段，未提供配图时 hasFigure 为 false', async () => {
             mocks.mockPrismaErrorItem.create.mockResolvedValue({ id: 'error-item-1', userId: 'user-123' });
 
             await POST(new Request('http://localhost/api/error-items', {

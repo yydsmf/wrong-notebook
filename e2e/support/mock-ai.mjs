@@ -8,6 +8,16 @@ function json(response, status, value) {
     response.end(JSON.stringify(value));
 }
 
+function stream(response, chunks) {
+    response.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+    });
+    for (const chunk of chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    response.end('data: [DONE]\n\n');
+}
+
 function textOf(messages) {
     return messages.map((message) => typeof message.content === 'string' ? message.content :
         (message.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n')).join('\n');
@@ -97,13 +107,23 @@ export async function startMockAI() {
                     difficultyStars: 3, gradeSemester: '初二上', requiresImage: false,
                     hasFigure: operation === 'variant', figureSvg: operation === 'variant' ? FIGURE : null,
                 };
-                return json(response, 200, { id: `e2e-${state.id}-${state.calls.length}`, object: 'chat.completion', created: 0, model: 'e2e-mock-model',
-                    choices: [{ index: 0, message: { role: 'assistant', content: ['analysis', 'variant'].includes(operation) ?
+                const content = ['analysis', 'variant'].includes(operation) ?
                         `<question_text>${payload.questionText}</question_text><answer_text>${payload.answerText}</answer_text><analysis>${payload.analysis}</analysis>` +
                         `<subject>${payload.subject}</subject><knowledge_points>${payload.knowledgePoints.join(',')}</knowledge_points>` +
                         `<difficulty_stars>${payload.difficultyStars}</difficulty_stars><grade_semester>${payload.gradeSemester}</grade_semester>` +
-                        `<requires_image>false</requires_image><has_figure>${payload.hasFigure}</has_figure><figure_svg>${payload.figureSvg || ''}</figure_svg>` : JSON.stringify(payload) }, finish_reason: 'stop' }],
-                    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+                        `<requires_image>false</requires_image><has_figure>${payload.hasFigure}</has_figure><figure_svg>${payload.figureSvg || ''}</figure_svg>` : JSON.stringify(payload);
+                const completion = { id: `e2e-${state.id}-${state.calls.length}`, object: 'chat.completion', created: 0, model: 'e2e-mock-model',
+                    choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
+                if (body.stream) {
+                    const midpoint = Math.max(1, Math.floor(content.length / 2));
+                    return stream(response, [
+                        { id: completion.id, object: 'chat.completion.chunk', created: 0, model: completion.model, choices: [{ index: 0, delta: { role: 'assistant', content: content.slice(0, midpoint) }, finish_reason: null }] },
+                        { id: completion.id, object: 'chat.completion.chunk', created: 0, model: completion.model, choices: [{ index: 0, delta: { content: content.slice(midpoint) }, finish_reason: 'stop' }] },
+                        { id: completion.id, object: 'chat.completion.chunk', created: 0, model: completion.model, choices: [], usage: completion.usage },
+                    ]);
+                }
+                return json(response, 200, completion);
             } finally {
                 call.completed = true;
                 state.inflight--;

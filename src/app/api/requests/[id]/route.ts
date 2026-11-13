@@ -7,7 +7,7 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 /**
  * GET /api/requests/:id
- * 取回被浏览器中断的耗时请求的结果：{ state: 'running' } 或 { state: 'done', status, body }；
+ * 取回耗时请求的阶段或最终结果：{ state: 'running', progress } 或 { state: 'done', status, body }；
  * 请求没有到达服务端或结果已过期时返回 404
  */
 export async function GET(_req: Request, { params }: RouteContext) {

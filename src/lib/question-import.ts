@@ -64,7 +64,7 @@ export async function saveParsedQuestion(
         difficultyStars: parsed.difficultyStars ?? null,
         recognizedGradeSemester: parsed.gradeSemester ?? null,
         hasFigure: parsed.hasFigure ?? false,
-        figureSvg: parsed.figureSvg ?? null,
+        figureDescription: parsed.figureDescription ?? null,
         subjectId: options.subjectId || undefined,
         subjectName: options.subjectId ? undefined : parsed.subject,
         originalImageUrl: options.imageUrl || "",

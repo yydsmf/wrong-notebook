@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { QuestionTextRenderer } from "@/components/question-text-renderer";
 import { QuestionFigure } from "@/components/question-figure";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -36,7 +37,7 @@ export function PreviewPanel({ data, children }: PreviewPanelProps) {
     return (
         <div className="space-y-6">
             <PreviewCard title={t.editor.preview?.question || "Question Preview"}>
-                <MarkdownRenderer content={data.questionText} />
+                <QuestionTextRenderer content={data.questionText} />
                 <QuestionFigure svg={data.figureSvg} />
             </PreviewCard>
 

@@ -49,6 +49,7 @@ next-env.d.ts
 /config/app-config.json
 /config/minimax-code.json
 /config/background-tasks.json
+/config/setup-token
 /config/tts-cache/
 dist-scripts
 
@@ -72,6 +73,12 @@ upload_test_output*.txt
 # data
 /data/
 .next-prebuilt/
+
+# Private local deployment files
+/deploy/
+/Dockerfile.deploy
+/Dockerfile.runtime
+/doc/OPENWRT_DEPLOYMENT.md
 
 # Deployment script checks
 __pycache__/

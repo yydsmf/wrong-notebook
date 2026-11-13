@@ -4,7 +4,7 @@ import { getAIService } from "@/lib/ai";
 import { getCurrentUser } from "@/lib/current-user";
 import { unauthorized, notFound, badRequest, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { consumeAiQuota } from "@/lib/ai-quota";
 import { withRecoverableResponse } from "@/lib/recoverable-response";
 
@@ -15,7 +15,7 @@ const logger = createLogger('api:error-items:figure');
  * 用原题图片让 AI 重新判断是否有配图，并重绘 SVG 配图后保存
  */
 async function handlePost(
-    _req: Request,
+    req: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
     const { id } = await params;
@@ -43,8 +43,9 @@ async function handlePost(
         const limited = await consumeAiQuota(user, 'figure');
         if (limited) return limited;
 
-        const updated = await trackBackgroundTask(
-            { userId: user.id, kind: 'figure', subject: describeQuestion(item), link: `/error-items/${id}` },
+        const updated = await trackBackgroundTaskForRequest(
+            req,
+            { userId: user.id, kind: 'figure', subject: describeQuestion(item), link: `/error-items/${id}`, retryRequest: { path: `/api/error-items/${id}/figure`, body: {} } },
             async () => {
                 const figure = await getAIService().generateFigureSvg(match[2], match[1], item.questionText);
                 return prisma.errorItem.update({

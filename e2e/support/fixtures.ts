@@ -76,9 +76,9 @@ export class Scenario {
         writeFileSync(join(runState.configDir, 'app-config.json'), JSON.stringify({ ...runState.baseline, openai: provider }));
         await this.db.user.updateMany({ where: { email: 'admin@localhost' }, data: { password: adminHash, confirmBeforeImport: false, gradeRecognitionMode: 'fixed', fixedGradeSemester: null, enableSvgAnimation: false } });
         await this.db.user.updateMany({ where: { email: 'setup-admin@localhost' }, data: { password: defaultHash } });
-        this.user = await this.db.user.create({ data: { email: `a-${this.id}@example.test`, password: passwordHash, name: 'E2E 学生 A',
+        this.user = await this.db.user.create({ data: { email: `a-${this.id}@example.test`, password: passwordHash, name: 'E2E 管理员 A', role: 'admin',
             educationStage: 'junior_high', enrollmentYear: 2025, fixedGradeSemester: '初二上', enableSvgAnimation: false } });
-        this.otherUser = await this.db.user.create({ data: { email: `b-${this.id}@example.test`, password: passwordHash, name: 'E2E 学生 B',
+        this.otherUser = await this.db.user.create({ data: { email: `b-${this.id}@example.test`, password: passwordHash, name: 'E2E 管理员 B', role: 'admin',
             educationStage: 'junior_high', enrollmentYear: 2025, fixedGradeSemester: '初二上', enableSvgAnimation: false } });
         this.book = await this.db.subject.create({ data: { name: '数学', stage: 'junior_high', subjectKey: 'math', userId: this.user.id } });
         const entries = await Promise.all(['a', 'b', 'other'].map((key, order) => this.db.paperGroup.create({ data: {
@@ -111,7 +111,7 @@ export class Scenario {
     async resetCurrentAccount() {
         const email = this.user.email;
         await this.db.user.delete({ where: { id: this.user.id } });
-        this.user = await this.db.user.create({ data: { email, password: passwordHash, name: 'E2E 恢复账号',
+        this.user = await this.db.user.create({ data: { email, password: passwordHash, name: 'E2E 恢复账号', role: 'admin',
             educationStage: 'junior_high', enrollmentYear: 2025, fixedGradeSemester: '初二上', enableSvgAnimation: false } });
     }
 

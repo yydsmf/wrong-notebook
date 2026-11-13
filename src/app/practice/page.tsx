@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { QuestionTextRenderer } from "@/components/question-text-renderer";
 import { PracticeResultCard } from "@/components/practice-result-card";
 import { QuestionFigure } from "@/components/question-figure";
 import { DifficultyPicker, DifficultySelect } from "@/components/practice/difficulty-picker";
@@ -85,7 +86,7 @@ function PracticeContent() {
                                     {(t.practice.lastGeneratedAt || "Generated at {time}").replace("{time}", new Date(session.generatedAt).toLocaleString(language === "zh" ? "zh-CN" : "en-US"))}
                                 </p>
                             )}
-                            <MarkdownRenderer content={question.questionText} className="font-medium" />
+                            <QuestionTextRenderer content={question.questionText} className="font-medium" />
                             <QuestionFigure svg={question.figureSvg} />
                         </CardContent>
                     </Card>

@@ -101,7 +101,7 @@ ENV APP_REVISION=${APP_REVISION}
 # 由 Git 标签得出的版本号，留空时运行时回退到 package.json 的版本
 ARG APP_VERSION=
 ENV APP_VERSION=${APP_VERSION}
-LABEL org.opencontainers.image.source="https://github.com/margrop/wrong-notebook" \
+LABEL org.opencontainers.image.source="https://github.com/yydsmf/wrong-notebook" \
       org.opencontainers.image.revision="${APP_REVISION}" \
       org.opencontainers.image.version="${APP_VERSION}"
 

@@ -64,7 +64,7 @@ const params = (id: string) => ({ params: Promise.resolve({ id }) });
 describe('/api/exams', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mocks.user.findUnique.mockResolvedValue({ id: 'user-1' });
+        mocks.user.findUnique.mockResolvedValue({ id: 'user-1', role: 'admin', isActive: true });
         // 后台生成在测试中立即结束
         mocks.examPaper.findUnique.mockResolvedValue(null);
     });
@@ -369,7 +369,10 @@ describe('/api/exams', () => {
             expect(mocks.generateSimilarQuestion).toHaveBeenCalledWith('原题', ['函数'], 'zh', 'hard', '初二上', null);
             expect(mocks.examQuestion.updateMany).toHaveBeenCalledWith({
                 where: { id: 'q1', practiceRecords: { none: {} } },
-                data: { status: 'ready', questionText: '新题', answerText: '新答', analysis: '新析', figureSvg: null, error: null },
+                data: {
+                    status: 'ready', questionText: '新题', answerText: '新答', analysis: '新析', figureSvg: null,
+                    figureScale: 100, figureAlign: 'center', answerSpacePx: null, error: null,
+                },
             });
             expect(mocks.examPaper.update).toHaveBeenCalledWith({ where: { id: 'p1' }, data: { status: 'ready' } });
         });
@@ -453,7 +456,10 @@ describe('/api/exams', () => {
             expect(mocks.generateSimilarQuestion).toHaveBeenCalledWith('原题1', ['函数'], 'zh', 'hard', null, undefined);
             expect(mocks.examQuestion.update).toHaveBeenCalledWith({
                 where: { id: 'q1' },
-                data: { status: 'ready', questionText: '新题', answerText: '答', analysis: '析', figureSvg: null, error: null },
+                data: {
+                    status: 'ready', questionText: '新题', answerText: '答', analysis: '析', figureSvg: null,
+                    figureScale: 100, figureAlign: 'center', answerSpacePx: null, error: null,
+                },
             });
             expect(mocks.examQuestion.update).toHaveBeenCalledWith({ where: { id: 'q2' }, data: { status: 'failed', error: 'SOURCE_DELETED' } });
             expect(mocks.examPaper.update).toHaveBeenLastCalledWith({ where: { id: 'p1' }, data: { status: 'partial' } });

@@ -161,7 +161,7 @@ export function getRetagJob(userId: string, subjectId: string): RetagJobStatus |
 /**
  * 在后台为错题本中的全部题目重新生成知识点；同一错题本已在运行时直接返回当前状态
  */
-export async function startRetagJob(userId: string, subjectId: string): Promise<RetagJobStatus> {
+export async function startRetagJob(userId: string, subjectId: string, retryable = false): Promise<RetagJobStatus> {
     const key = jobKey(userId, subjectId);
     const existing = jobs.get(key);
     if (existing?.running) {
@@ -185,7 +185,7 @@ export async function startRetagJob(userId: string, subjectId: string): Promise<
     jobs.set(key, status);
 
     const notebook = await prisma.subject.findUnique({ where: { id: subjectId }, select: { name: true } });
-    const task = startBackgroundTask({ userId, kind: 'retag_notebook', subject: notebook?.name ?? null, link: `/notebooks/${subjectId}`, total: items.length });
+    const task = startBackgroundTask({ userId, kind: 'retag_notebook', subject: notebook?.name ?? null, link: `/notebooks/${subjectId}`, total: items.length, ...(retryable ? { retryRequest: { path: `/api/notebooks/${subjectId}/retag`, body: {} } } : {}) });
 
     const queue = items.map((item) => item.id);
     const worker = async () => {

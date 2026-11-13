@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BackButton } from "@/components/ui/back-button";
 import { PageLoading } from "@/components/ui/page-loading";
+import { PageHeader } from "@/components/ui/page-header";
 import { ExamFigureScaleBar } from "@/components/exam/exam-figure-scale-bar";
 import { ExamQuestionCard } from "@/components/exam/exam-question-card";
 import { ExamStatusBadge } from "@/components/exam/exam-status-badge";
@@ -19,6 +20,9 @@ import { apiClient } from "@/lib/api-client";
 import type { FigureAlign } from "@/lib/figure-scale";
 import type { ExamPaperDetail, PracticeResult } from "@/types/api";
 import { confirmDialog } from "@/lib/feedback";
+import { useSession } from "next-auth/react";
+import { StudentAnswerWorkspace } from "@/components/student-answer-workspace";
+import type { StudentAnswerQuestion } from "@/types/api";
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -27,6 +31,7 @@ export default function ExamDetailPage() {
     const params = useParams();
     const router = useRouter();
     const { t, language } = useLanguage();
+    const { data: session, status: sessionStatus } = useSession();
     const paperId = params.id as string;
     const [paper, setPaper] = useState<ExamPaperDetail | null>(null);
     usePageTitle(t.exam.title, paper?.title);
@@ -59,13 +64,34 @@ export default function ExamDetailPage() {
     }, [paper, load]);
 
     if (notFound) return <div className="p-8 text-center">{t.exam.notFound}</div>;
-    if (!paper) return <PageLoading label={t.common.loading} />;
+    if (!paper || sessionStatus === "loading") return <PageLoading label={t.common.loading} />;
+
+    if (session?.user?.role === "user") {
+        const questions: StudentAnswerQuestion[] = paper.questions
+            .filter((question) => question.status === "ready" && question.questionText)
+            .map((question) => ({
+                id: question.id,
+                questionText: question.questionText || "",
+                figureSvg: question.figureSvg,
+                imageFragments: question.imageFragments,
+                figureScale: question.figureScale,
+                figureAlign: question.figureAlign,
+                mode: question.mode,
+                options: question.options,
+            }));
+        return (
+            <main className="mx-auto min-h-screen max-w-3xl space-y-6 px-4 py-6 md:px-8 md:py-8">
+                <PageHeader title={paper.title} description={t.exam.title} />
+                <StudentAnswerWorkspace kind="exam" examPaperId={paper.id} questions={questions} />
+            </main>
+        );
+    }
 
     const readyCount = paper.questions.filter((question) => question.status === "ready").length;
     const recorded = paper.questions.some((question) => question.attempts.length > 0);
     const hasFailed = paper.questions.some((question) => question.status === "failed");
     const recordable = paper.questions.filter((question) => question.status === "ready" && question.errorItemId);
-    const figureQuestions = paper.questions.filter((question) => question.status === "ready" && Boolean(question.figureSvg));
+    const figureQuestions = paper.questions.filter((question) => question.status === "ready" && (Boolean(question.figureSvg) || Boolean(question.imageFragments?.length)));
 
     const selectedCount = draft ? recordable.filter((question) => draft[question.id]).length : 0;
 

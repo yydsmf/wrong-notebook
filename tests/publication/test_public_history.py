@@ -68,6 +68,22 @@ class PublicHistoryTests(unittest.TestCase):
         self.assertIn("内网地址", result.stderr)
         self.assertNotIn(address, result.stderr)
 
+    def test_setup_token_is_rejected_even_after_removal(self):
+        self.commit("config/setup-token", "test-only-token\n")
+        self.git("rm", "-q", "config/setup-token")
+        self.git("commit", "-qm", "test: 删除初始化令牌")
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("config/setup-token", result.stderr)
+
+    def test_upstream_telemetry_examples_are_allowed_only_in_reviewed_file(self):
+        address = ".".join(("10", "0", "0", "1"))
+        self.commit("src/__tests__/integration/admin-telemetry-route.test.ts", "http://" + address + "/api\n")
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.commit("README.md", "http://" + address + "/api\n")
+        self.assertEqual(self.check().returncode, 1)
+
     def test_merging_private_history_is_rejected(self):
         public = self.git("rev-parse", "HEAD").decode().strip()
         self.git("checkout", "-qb", "private-deploy")

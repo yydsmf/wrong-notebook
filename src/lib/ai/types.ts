@@ -5,6 +5,7 @@ import type { ParsedQuestionFromSchema } from './schema';
 // Import and re-export MistakeStatus from the single source of truth
 import type { MistakeStatus } from '../mistake-status';
 import type { NarrationSegment } from '../svg-animation';
+import type { RequestProgress } from '../request-progress';
 export type { MistakeStatus };
 
 export type DifficultyLevel = 'easy' | 'medium' | 'hard' | 'harder';
@@ -60,6 +61,7 @@ export interface AnswerGradingInput {
     answerText: string;
     analysis?: string | null;
     userAnswer: string;
+    userAnswerImage?: { base64: string; mimeType: string };
     language?: 'zh' | 'en';
 }
 
@@ -67,6 +69,8 @@ export interface AnswerGradingResult {
     correct: boolean;
     /** 一句话说明判定依据 */
     reason: string;
+    /** 判错时面向学生的错因分析；判对时可为空 */
+    mistakeAnalysis?: string;
 }
 
 export interface MasteryEvaluationResult {
@@ -126,4 +130,6 @@ export interface AIConfig {
     // Azure OpenAI 特有字段
     azureDeployment?: string;   // Azure 部署名称
     azureApiVersion?: string;   // API 版本 (如 2024-02-15-preview)
+    /** 服务端阶段回调；仅用于更新请求状态，不向浏览器转发 AI 原始内容。 */
+    onProgress?: (progress: RequestProgress) => void;
 }

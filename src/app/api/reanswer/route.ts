@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { badRequest, createErrorResponse, ErrorCode } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { prisma } from "@/lib/prisma";
 import { getNotebookCandidateTags } from "@/lib/ai/tag-service";
 import { resolveNotebookScope } from "@/lib/notebook-scope";
@@ -13,11 +13,15 @@ import { consumeAiQuota } from "@/lib/ai-quota";
 import { withRecoverableResponse } from "@/lib/recoverable-response";
 import { getFixedQuestionGrade, resolveQuestionGrade } from "@/lib/question-grade";
 import { getAppTimeZone } from "@/lib/config";
+import { updateStoredResponseProgressFromRequest } from "@/lib/recoverable-response";
+import type { RequestProgress } from "@/lib/request-progress";
 
 const logger = createLogger('api:reanswer');
 
 async function handlePost(req: Request) {
     logger.info('Reanswer API called');
+    const updateProgress = (progress: RequestProgress) => updateStoredResponseProgressFromRequest(req, progress);
+    updateProgress({ stage: 'requesting', percent: 15 });
 
     const session = await getServerSession(authOptions);
 
@@ -59,17 +63,20 @@ async function handlePost(req: Request) {
         const limited = await consumeAiQuota(session.user, 'reanswer');
         if (limited) return limited;
 
-        const aiService = getAIService();
+        updateProgress({ stage: 'thinking', percent: 25 });
+        const aiService = getAIService({ onProgress: updateProgress });
         // 新录入的文字题遵循账户规则，已有题目的重新解题沿用其手工年级。
         const gradeProfile = forImport === true && session.user?.email
             ? await prisma.user.findUnique({ where: { email: session.user.email } }) : null;
         const targetGrade = gradeSemester ?? (gradeProfile ? getFixedQuestionGrade(gradeProfile, getAppTimeZone()) : undefined);
 
         // 根据是否有图片选择不同的重新解题方式
-        const result = await trackBackgroundTask(
-            { userId: session.user.id, kind: 'reanswer', subject: describeQuestion({ questionText }) },
+        const result = await trackBackgroundTaskForRequest(
+            req,
+            { userId: session.user.id, kind: 'reanswer', subject: describeQuestion({ questionText }), retryRequest: { path: '/api/reanswer', body } },
             () => aiService.reanswerQuestion(questionText, language, subject, imageBase64, targetGrade, candidateTags)
         );
+        updateProgress({ stage: 'collecting', percent: 90 });
 
         logger.info('Reanswer successful');
 

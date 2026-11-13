@@ -18,9 +18,11 @@ import {
 } from "@/lib/figure-scale";
 import type { FigureAlign } from "@/lib/figure-scale";
 import { frontendLogger } from "@/lib/frontend-logger";
+import type { ImageFragment } from "@/lib/image-fragments";
 
 interface FigureScaleEditorProps {
     svg: string | null | undefined;
+    images?: ImageFragment[];
     scale?: number;
     align?: FigureAlign | string | null;
     /** 统一调整全卷配图比例时的临时预览值，未保存前优先预览该比例 */
@@ -28,16 +30,19 @@ interface FigureScaleEditorProps {
     /** 统一调整全卷配图位置时的临时预览值，未保存前优先预览该位置 */
     previewAlignOverride?: FigureAlign | null;
     onSave: (scale: number, align: FigureAlign) => Promise<void>;
+    onRemoveImage?: (id: string) => void | Promise<void>;
 }
 
 /** 预览当前题目的配图比例与显示位置，保存后用于详情显示和文字打印。 */
 export function FigureScaleEditor({
     svg,
+    images = [],
     scale,
     align,
     previewScaleOverride,
     previewAlignOverride,
     onSave,
+    onRemoveImage,
 }: FigureScaleEditorProps) {
     const { t } = useLanguage();
     const inputId = useId();
@@ -56,7 +61,7 @@ export function FigureScaleEditor({
     const alignChanged = draftAlign !== null && draftAlign !== savedAlign;
     const changed = scaleChanged || alignChanged;
 
-    if (!svg) return null;
+    if (!svg && images.length === 0) return null;
 
     const save = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -77,7 +82,7 @@ export function FigureScaleEditor({
 
     return (
         <div>
-            <QuestionFigure svg={svg} scale={effectiveScale} align={effectiveAlign} />
+            <QuestionFigure svg={svg} images={images} scale={effectiveScale} align={effectiveAlign} onRemoveImage={onRemoveImage} />
             <form onSubmit={save} className="figure-scale-editor-controls space-y-2 rounded-md border p-3 print:hidden">
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                     <label htmlFor={inputId}>{t.figure.scale}</label>

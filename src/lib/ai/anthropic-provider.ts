@@ -74,7 +74,7 @@ function splitKnowledgePoints(raw: string | null): string[] {
     return (raw || '').split(/[,，\n]/).map(k => k.trim()).filter(k => k.length > 0);
 }
 
-function parseQuestionResponse(text: string): ParsedQuestion {
+function parseQuestionResponse(text: string, includeFigureSvg = false): ParsedQuestion {
     const questionText = extractTag(text, "question_text");
     const answerText = extractTag(text, "answer_text");
     const analysis = extractTag(text, "analysis");
@@ -94,9 +94,12 @@ function parseQuestionResponse(text: string): ParsedQuestion {
         subject: normalizeSubject(extractTag(text, "subject")) || '其他',
         knowledgePoints: splitKnowledgePoints(extractTag(text, "knowledge_points")),
         requiresImage: extractTag(text, "requires_image")?.toLowerCase().trim() === 'true',
+        figureDescription: extractTag(text, "figure_description") || null,
         gradeSemester: parseRecognizedGrade(extractTag(text, "grade_semester")),
         difficultyStars: parseDifficultyStars(extractTag(text, "difficulty_stars")),
-        ...parseFigure(extractTag(text, "has_figure"), extractTag(text, "figure_svg")),
+        ...(includeFigureSvg
+            ? parseFigure(extractTag(text, "has_figure"), extractTag(text, "figure_svg"))
+            : parseFigure(extractTag(text, "has_figure"), null)),
     };
 
     const validation = safeParseParsedQuestion(result);
@@ -242,7 +245,7 @@ export class AnthropicProvider implements AIService {
         try {
             const text = await this.complete(systemPrompt.system, userPrompt, 8192);
             logger.box('🤖 AI Raw Response', text);
-            return normalizeGeneratedQuestion(parseQuestionResponse(text));
+            return normalizeGeneratedQuestion(parseQuestionResponse(text, true));
         } catch (error) {
             logger.error({ error, stack: error instanceof Error ? error.stack : undefined }, 'Error during question generation');
             this.handleError(error);
@@ -340,7 +343,13 @@ export class AnthropicProvider implements AIService {
         logger.info({ provider: 'Anthropic' }, 'Answer Grading Request');
 
         try {
-            const text = await this.complete(prompt.system, prompt.user, 4096);
+            const content = input.userAnswerImage
+                ? [
+                    { type: 'text' as const, text: prompt.user },
+                    imageBlock(input.userAnswerImage.base64, input.userAnswerImage.mimeType),
+                ]
+                : prompt.user;
+            const text = await this.complete(prompt.system, content, 4096);
             logger.debug({ rawResponse: text }, 'Grading AI raw response');
             return parseAnswerGrading(text);
         } catch (error) {

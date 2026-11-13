@@ -5,7 +5,7 @@ import type { DifficultyLevel } from "@/lib/ai/types";
 import { createLogger } from "@/lib/logger";
 import { getMasteryThreshold } from "@/lib/mastery";
 import { DEFAULT_MASTERY_THRESHOLD, masteryStatusWhere } from "@/lib/mastery-status";
-import { startBackgroundTask, trackBackgroundTask } from "@/lib/background-tasks";
+import { startBackgroundTask, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { resolveNotebookScope, SUBJECT_DISPLAY_NAMES } from "@/lib/notebook-scope";
 import type { BackgroundTaskHandle } from "@/lib/background-tasks";
 
@@ -33,9 +33,14 @@ export interface ExamSelection {
 }
 
 /** 构造抽题条件：限定错题本、掌握范围（按用户的已掌握阈值），可选按知识点标签和卷别分组 */
-export function buildSourceWhere(userId: string, selection: ExamSelection, masteryThreshold = DEFAULT_MASTERY_THRESHOLD): Prisma.ErrorItemWhereInput {
+export function buildSourceWhere(
+    userId: string,
+    selection: ExamSelection,
+    masteryThreshold = DEFAULT_MASTERY_THRESHOLD,
+    sourceUserIds?: string[],
+): Prisma.ErrorItemWhereInput {
     const where: Prisma.ErrorItemWhereInput = {
-        userId,
+        userId: sourceUserIds ? { in: sourceUserIds } : userId,
         subjectId: { in: selection.subjectIds },
         shortId: { not: null },
     };
@@ -78,16 +83,47 @@ export function pickLeastPracticed<T extends { practiceCount: number; inExam?: b
 }
 
 /** 按抽题规则选取原题，练习次数为该题的全部举一反三记录数，同次数优先选未出现在已有试卷中的题 */
-export async function selectSourceItems(userId: string, selection: ExamSelection) {
+export async function selectSourceItems(
+    userId: string,
+    selection: ExamSelection,
+    options: { sourceUserIds?: string[] } = {},
+) {
     const candidates = await prisma.errorItem.findMany({
-        where: buildSourceWhere(userId, selection, await getMasteryThreshold(userId)),
-        select: { id: true, shortId: true, _count: { select: { practiceRecords: true, examQuestions: true } } },
+        where: buildSourceWhere(
+            userId,
+            selection,
+            await getMasteryThreshold(userId),
+            options.sourceUserIds,
+        ),
+        select: {
+            id: true,
+            shortId: true,
+            _count: { select: { practiceRecords: true, examQuestions: true } },
+        },
     });
-    const items = candidates.map(({ _count, ...item }) => ({
+    let items = candidates.map(({ _count, ...item }) => ({
         ...item,
         practiceCount: _count.practiceRecords,
         inExam: (_count.examQuestions ?? 0) > 0,
     }));
+
+    if (options.sourceUserIds) {
+        const progress = await prisma.studentAnswer.groupBy({
+            by: ['errorItemId'],
+            where: {
+                errorItemId: { in: candidates.map((item) => item.id) },
+                isCorrect: { not: null },
+                submission: { userId, status: 'completed' },
+            },
+            _count: { _all: true },
+        });
+        const countByItem = new Map(progress.flatMap((entry) => entry.errorItemId ? [[entry.errorItemId, entry._count._all] as const] : []));
+        items = items.map((item) => ({
+            ...item,
+            practiceCount: countByItem.get(item.id) ?? 0,
+            inExam: (countByItem.get(item.id) ?? 0) > 0,
+        }));
+    }
     return (selection.pickRule ?? DEFAULT_EXAM_PICK_RULE) === 'random'
         ? sampleItems(items, selection.count)
         : pickLeastPracticed(items, selection.count);
@@ -144,6 +180,9 @@ async function generateQuestion(questionId: string, difficulty: DifficultyLevel,
                 answerText: generated.answerText,
                 analysis: generated.analysis,
                 figureSvg: generated.figureSvg ?? null,
+                figureScale: 100,
+                figureAlign: 'center',
+                answerSpacePx: null,
                 error: null,
             },
         });
@@ -173,7 +212,7 @@ export async function generateExamPaper(paperId: string, language: 'zh' | 'en' =
         const queue = paper.questions.map((question) => question.id);
         const total = queue.length;
         let done = 0;
-        if (total > 0) task = startBackgroundTask({ userId: paper.userId, kind: 'exam', subject: paper.title, link: `/exams/${paperId}`, total });
+        if (total > 0) task = startBackgroundTask({ userId: paper.userId, kind: 'exam', subject: paper.title, link: `/exams/${paperId}`, total, retryRequest: { path: `/api/exams/${paperId}/retry`, body: { language } } });
         if (queue.length > 0) {
             await prisma.examQuestion.updateMany({ where: { id: { in: queue } }, data: { status: 'pending', error: null } });
             await prisma.examPaper.update({ where: { id: paperId }, data: { status: 'generating' } });
@@ -218,7 +257,7 @@ export interface RegeneratedExamQuestion {
     error: string | null;
 }
 
-const REGENERATED_SELECT = { status: true, questionText: true, answerText: true, analysis: true, figureSvg: true, error: true } as const;
+const REGENERATED_SELECT = { status: true, questionText: true, answerText: true, analysis: true, figureSvg: true, figureScale: true, figureAlign: true, answerSpacePx: true, error: true } as const;
 
 /**
  * 单独重新生成试卷中的一道题。AI 失败时保留原内容并抛出错误。
@@ -230,6 +269,7 @@ export async function regenerateExamQuestion(
     questionId: string,
     userId: string,
     mode: ExamRegenerateMode,
+    req: Request,
     language: 'zh' | 'en' = 'zh'
 ): Promise<RegeneratedExamQuestion> {
     const question = await prisma.examQuestion.findUnique({
@@ -265,14 +305,18 @@ export async function regenerateExamQuestion(
         const source = question.errorItem;
         if (!source) throw new Error('SOURCE_DELETED');
 
-        const generated = await trackBackgroundTask({ ...task, kind: 'exam' }, () => getAIService().generateSimilarQuestion(
-            source.questionText || '',
-            parseTagNames(source),
-            language,
-            question.paper.difficulty as DifficultyLevel,
-            source.gradeSemester,
-            source.figureSvg
-        ));
+        const generated = await trackBackgroundTaskForRequest(
+            req,
+            { ...task, kind: 'exam', retryRequest: { path: `/api/exams/${paperId}/questions/${questionId}/regenerate`, body: { mode, language } } },
+            () => getAIService().generateSimilarQuestion(
+                source.questionText || '',
+                parseTagNames(source),
+                language,
+                question.paper.difficulty as DifficultyLevel,
+                source.gradeSemester,
+                source.figureSvg
+            ),
+        );
         // AI 生成耗时较长，期间可能已录入结果，写入时再次确认
         const { count } = await prisma.examQuestion.updateMany({
             where: { id: questionId, practiceRecords: { none: {} } },
@@ -282,6 +326,9 @@ export async function regenerateExamQuestion(
                 answerText: generated.answerText,
                 analysis: generated.analysis,
                 figureSvg: generated.figureSvg ?? null,
+                figureScale: 100,
+                figureAlign: 'center',
+                answerSpacePx: null,
                 error: null,
             },
         });
@@ -293,9 +340,11 @@ export async function regenerateExamQuestion(
         const scope = question.errorItem?.subject ? resolveNotebookScope(question.errorItem.subject) : null;
         const subject = scope?.subject ? SUBJECT_DISPLAY_NAMES[scope.subject] : null;
 
-        const result = await trackBackgroundTask({ ...task, kind: 'reanswer' }, () => getAIService().reanswerQuestion(
-            questionText, language, subject, undefined, question.errorItem?.gradeSemester
-        ));
+        const result = await trackBackgroundTaskForRequest(
+            req,
+            { ...task, kind: 'reanswer', retryRequest: { path: `/api/exams/${paperId}/questions/${questionId}/regenerate`, body: { mode, language } } },
+            () => getAIService().reanswerQuestion(questionText, language, subject, undefined, question.errorItem?.gradeSemester),
+        );
         if (!result.answerText.trim() && !result.analysis.trim()) throw new Error('EMPTY_ANSWER');
 
         const data = { answerText: result.answerText, analysis: result.analysis };

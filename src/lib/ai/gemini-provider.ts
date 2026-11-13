@@ -107,7 +107,7 @@ export class GeminiProvider implements AIService {
         return cleaned.substring(startIndex + startTag.length, endIndex).trim();
     }
 
-    private parseResponse(text: string): ParsedQuestion {
+    private parseResponse(text: string, includeFigureSvg = false): ParsedQuestion {
         logger.debug({ textLength: text.length }, 'Parsing AI response');
 
         const questionText = this.extractTag(text, "question_text");
@@ -116,6 +116,7 @@ export class GeminiProvider implements AIService {
         const subjectRaw = this.extractTag(text, "subject");
         const knowledgePointsRaw = this.extractTag(text, "knowledge_points");
         const requiresImageRaw = this.extractTag(text, "requires_image");
+        const figureDescription = this.extractTag(text, "figure_description") || null;
         const wrongAnswerText = this.extractTag(text, "wrong_answer_text") || "";
         const mistakeAnalysis = this.extractTag(text, "mistake_analysis") || "";
         const mistakeStatusRaw = this.extractTag(text, "mistake_status");
@@ -154,9 +155,12 @@ export class GeminiProvider implements AIService {
             subject,
             knowledgePoints,
             requiresImage,
+            figureDescription,
             gradeSemester: parseRecognizedGrade(this.extractTag(text, "grade_semester")),
             difficultyStars: parseDifficultyStars(this.extractTag(text, "difficulty_stars")),
-            ...parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg")),
+            ...(includeFigureSvg
+                ? parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"))
+                : parseFigure(this.extractTag(text, "has_figure"), null)),
         };
 
         // Final Schema Validation
@@ -281,7 +285,7 @@ export class GeminiProvider implements AIService {
             logger.box('🤖 AI Raw Response', text);
 
             if (!text) throw new Error(response.candidates?.[0]?.finishReason === 'MAX_TOKENS' ? AI_OUTPUT_TRUNCATED : "Empty response from AI");
-            const parsedResult = this.parseResponse(text);
+            const parsedResult = this.parseResponse(text, true);
 
             logger.box('✅ Parsed & Validated Result', JSON.stringify(parsedResult, null, 2));
 
@@ -461,7 +465,12 @@ export class GeminiProvider implements AIService {
             const response = await this.retryOperation(() => this.ai.models.generateContent({
                 model: this.modelName,
                 config: { systemInstruction: prompt.system },
-                contents: prompt.user
+                contents: input.userAnswerImage
+                    ? [
+                        { inlineData: { mimeType: input.userAnswerImage.mimeType, data: input.userAnswerImage.base64.replace(/^data:[^;]+;base64,/, '') } },
+                        { text: prompt.user },
+                    ]
+                    : prompt.user,
             }));
 
             const text = response.text || '';

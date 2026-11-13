@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { MarkdownEditor } from "@/components/markdown-editor";
-import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { QuestionTextRenderer } from "@/components/question-text-renderer";
 import { RegenerateFigureButton } from "@/components/regenerate-figure-button";
 import { ReplaceQuestionImageButton } from "@/components/replace-question-image-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,10 @@ import { QuestionTags } from "./question-tags";
 import { ToggleImage } from "./toggle-image";
 import type { ErrorItemDetail, UpdateErrorItem } from "./types";
 import { useEditableField } from "./use-editable-field";
+import { ManualFigureUploadButton } from "@/components/manual-figure-upload-button";
+import { apiClient } from "@/lib/api-client";
+import { toast } from "@/lib/feedback";
+import { parseImageFragments } from "@/lib/image-fragments";
 
 interface QuestionCardProps {
     item: ErrorItemDetail;
@@ -46,12 +50,21 @@ export function QuestionCard({ item, educationStage, saveFields, onUpdate, reloa
                         <SaveCancelButtons onSave={question.submit} onCancel={question.cancel} />
                     </div>
                 ) : <>
-                    <MarkdownRenderer content={item.questionText} />
+                    <QuestionTextRenderer content={item.questionText} />
                     <FigureScaleEditor
-                        key={`${item.id}-${item.figureScale ?? 100}-${item.figureAlign ?? "center"}`}
+                        key={`${item.id}-${item.figureScale ?? 100}-${item.figureAlign ?? "center"}-${item.imageFragments ?? ""}`}
                         svg={item.figureSvg}
+                        images={parseImageFragments(item.imageFragments)}
                         scale={item.figureScale}
                         align={item.figureAlign}
+                        onRemoveImage={async (fragmentId) => {
+                            await apiClient.delete(`/api/error-items/${item.id}/figure-images`, {
+                                body: JSON.stringify({ fragmentId }),
+                            });
+                            const current = parseImageFragments(item.imageFragments).filter((fragment) => fragment.id !== fragmentId);
+                            onUpdate({ imageFragments: current.length > 0 ? JSON.stringify(current) : null });
+                            toast.success(t.common.messages.deleteSuccess || t.common.messages.saveSuccess);
+                        }}
                         onSave={(figureScale, figureAlign) => saveFields({ figureScale, figureAlign })}
                     />
                 </>}
@@ -76,6 +89,10 @@ export function QuestionCard({ item, educationStage, saveFields, onUpdate, reloa
                                 onDone={(originalImageUrl) => { onUpdate({ originalImageUrl }); setShowImage(true); }}
                             />
                             {item.originalImageUrl && <RegenerateFigureButton errorItemId={item.id} onDone={onUpdate} />}
+                            <ManualFigureUploadButton
+                                errorItemId={item.id}
+                                onDone={(imageFragments) => onUpdate({ imageFragments })}
+                            />
                         </>}
                     />
                 </div>

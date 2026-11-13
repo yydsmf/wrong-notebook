@@ -14,7 +14,6 @@ import { generateUniqueShortId } from "@/lib/short-id";
 import { resolveNotebookForSubject } from "@/lib/notebook-resolver";
 import { scheduleMasteryEvaluation } from "@/lib/mastery";
 import { findDuplicateQuestion, recordDuplicateQuestion, runQuestionImportTransaction } from "@/lib/question-deduplication";
-import { MAX_FIGURE_SVG_LENGTH, sanitizeFigureSvg } from "@/lib/figure-svg";
 import { getDefaultPaperLevelGroupId, ensureDefaultPaperGroups } from "@/lib/paper-level";
 import { DEFAULT_FIGURE_ALIGN, DEFAULT_FIGURE_SCALE, FIGURE_ALIGNS, MAX_FIGURE_SCALE, MIN_FIGURE_SCALE } from "@/lib/figure-scale";
 import { questionSaveErrorResponse } from "@/lib/question-save-error-response";
@@ -41,7 +40,7 @@ const importSchema = z.object({
     paperLevel: z.string().max(30).nullish(),
     difficultyStars: z.number().int().min(1).max(5).nullish(),
     hasFigure: z.boolean().optional(),
-    figureSvg: z.string().max(MAX_FIGURE_SVG_LENGTH).nullish(),
+    figureDescription: z.string().max(10000).nullish(),
     figureScale: z.number().int().min(MIN_FIGURE_SCALE).max(MAX_FIGURE_SCALE).default(DEFAULT_FIGURE_SCALE),
     figureAlign: z.enum(FIGURE_ALIGNS).default(DEFAULT_FIGURE_ALIGN),
     geogebraCommands: z.string().nullish(),
@@ -70,11 +69,11 @@ export async function POST(req: Request) {
             gradeSemester,
             paperLevel,
             difficultyStars,
+            figureDescription,
             geogebraCommands,
         } = body;
-        // 配图 SVG 入库前再净化一次，无效时丢弃
-        const figureSvg = sanitizeFigureSvg(body.figureSvg);
-        const hasFigure = !!body.hasFigure || figureSvg !== null;
+        // 新上传流程只记录 AI 判断出的配图状态；原题配图由用户手动上传或主动点击 AI 重绘。
+        const hasFigure = !!body.hasFigure;
 
         // 记录请求参数（不记录完整图片数据）
         logger.debug({
@@ -220,7 +219,8 @@ export async function POST(req: Request) {
                         paperLevel: resolvedPaperLevel,
                         difficultyStars: difficultyStars ?? null,
                         hasFigure,
-                        figureSvg,
+                        figureDescription: figureDescription || null,
+                        figureSvg: null,
                         figureScale: body.figureScale,
                         figureAlign: body.figureAlign,
                         geogebraCommands: geogebraCommands || null,

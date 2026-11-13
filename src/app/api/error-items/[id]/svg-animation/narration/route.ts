@@ -4,7 +4,7 @@ import { getAIService } from "@/lib/ai";
 import { getCurrentUser } from "@/lib/current-user";
 import { unauthorized, notFound, badRequest, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { consumeAiQuota } from "@/lib/ai-quota";
 import { embedNarration } from "@/lib/svg-animation";
 import { withRecoverableResponse } from "@/lib/recoverable-response";
@@ -45,8 +45,9 @@ async function handlePost(req: Request, { params }: RouteContext) {
         const limited = await consumeAiQuota(user, 'animation');
         if (limited) return limited;
 
-        const updated = await trackBackgroundTask(
-            { userId: user.id, kind: 'svg_narration', subject: describeQuestion(item), link: `/error-items/${id}` },
+        const updated = await trackBackgroundTaskForRequest(
+            req,
+            { userId: user.id, kind: 'svg_narration', subject: describeQuestion(item), link: `/error-items/${id}`, retryRequest: { path: `/api/error-items/${id}/svg-animation/narration`, body: { language } } },
             async () => {
                 const narration = await getAIService().generateSvgNarration(item.questionText || "", item.answerText || "", item.analysis || "", svgAnimation, language);
                 if (!narration) throw new Error("NO_VALID_NARRATION");

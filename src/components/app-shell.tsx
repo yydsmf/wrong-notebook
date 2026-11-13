@@ -44,6 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const { t } = useLanguage();
     const { data: session, status } = useSession();
     const isAdmin = session?.user?.role === "admin";
+    const navItems = isAdmin ? NAV_ITEMS : NAV_ITEMS.filter((item) => item.key !== "stats");
     const isBare = BARE_PATHS.some((pattern) => pattern.test(pathname));
     useSetupRedirect(isAdmin && !isBare);
 
@@ -63,9 +64,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     </Link>
 
                     <nav className="ml-4 hidden items-center gap-1 md:flex">
-                        {NAV_ITEMS.map((item) => {
+                        {navItems.map((item) => {
                             const active = item.match(pathname);
                             const Icon = item.icon;
+                            if (!isAdmin && (item.key === "home" || item.key === "notebooks")) {
+                                return (
+                                    <button key={item.key} type="button" disabled aria-disabled="true" className="flex cursor-not-allowed items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground/40">
+                                        <Icon className="h-4 w-4" />{t.nav[item.key]}
+                                    </button>
+                                );
+                            }
                             return (
                                 <Link
                                     key={item.key}
@@ -102,8 +110,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                                 </Button>
                             </Link>
                         )}
-                        <ThemeToggle />
-                        <SettingsDialog />
+                        {isAdmin && <ThemeToggle />}
+                        {isAdmin && <SettingsDialog />}
                         <Button
                             variant="ghost"
                             size="icon"
@@ -120,10 +128,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="pb-20 md:pb-0">{children}</div>
 
             <nav className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t bg-card/90 backdrop-blur-md md:hidden print:hidden">
-                <div className="grid h-16 grid-cols-5">
-                    {NAV_ITEMS.map((item) => {
+                <div className={cn("grid h-16", isAdmin ? "grid-cols-5" : "grid-cols-4")}>
+                    {navItems.map((item) => {
                         const active = item.match(pathname);
                         const Icon = item.icon;
+                        if (!isAdmin && (item.key === "home" || item.key === "notebooks")) {
+                            return (
+                                <button key={item.key} type="button" disabled aria-disabled="true" className="flex cursor-not-allowed flex-col items-center justify-center gap-1 text-[11px] font-medium text-muted-foreground/40">
+                                    <span className="flex h-7 w-12 items-center justify-center"><Icon className="h-5 w-5" /></span>
+                                    {t.nav[item.key]}
+                                </button>
+                            );
+                        }
                         return (
                             <Link
                                 key={item.key}

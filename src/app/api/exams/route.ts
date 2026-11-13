@@ -8,6 +8,7 @@ import { DEFAULT_EXAM_PICK_RULE, EXAM_DIFFICULTIES, EXAM_PICK_RULES, EXAM_SCOPES
 import { getAppTimeZone } from "@/lib/config";
 import { formatDateTime } from "@/lib/date-time";
 import { consumeAiQuota } from "@/lib/ai-quota";
+import { getStudentVisibleExamOwnerIds } from "@/lib/shared-exams";
 
 const logger = createLogger('api:exams');
 
@@ -34,8 +35,11 @@ export async function GET() {
             return unauthorized("Authentication required");
         }
 
+        const visibleOwnerIds = user.role === 'admin'
+            ? [user.id]
+            : await getStudentVisibleExamOwnerIds(user.id);
         const papers = await prisma.examPaper.findMany({
-            where: { userId: user.id },
+            where: { userId: { in: visibleOwnerIds } },
             orderBy: { createdAt: 'desc' },
             select: {
                 id: true,
@@ -49,6 +53,21 @@ export async function GET() {
                 questions: { select: { status: true, _count: { select: { practiceRecords: true } } } },
             },
         });
+
+        if (user.role !== 'admin') {
+            const submissions = await prisma.studentSubmission.findMany({
+                where: { userId: user.id, kind: 'exam', examPaperId: { in: papers.map((paper) => paper.id) } },
+                select: { examPaperId: true },
+                distinct: ['examPaperId'],
+            });
+            const recordedIds = new Set(submissions.flatMap((submission) => submission.examPaperId ? [submission.examPaperId] : []));
+            return NextResponse.json(papers.map(({ questions, ...paper }) => ({
+                ...paper,
+                questionCount: questions.length,
+                readyCount: questions.filter((question) => question.status === 'ready').length,
+                recordedCount: recordedIds.has(paper.id) ? 1 : 0,
+            })));
+        }
 
         return NextResponse.json(papers.map(({ questions, ...paper }) => ({
             ...paper,
@@ -79,17 +98,22 @@ export async function POST(req: Request) {
         }
         const { subjectIds, tagNames, paperLevelIds, scope, count, pickRule, difficulty, language } = parsed.data;
 
-        // 只允许使用自己的错题本
+        const sourceUserIds = user.role === 'admin'
+            ? [user.id]
+            : (await prisma.user.findMany({ where: { role: 'admin', isActive: true }, select: { id: true } })).map((admin) => admin.id);
+        if (sourceUserIds.length === 0) return badRequest("NO_SOURCE_ITEMS");
+
+        // 管理员使用自己的错题本；学生只读共享所有管理员的题库。
         const notebooks = await prisma.subject.findMany({
-            where: { id: { in: subjectIds }, userId: user.id },
+            where: { id: { in: subjectIds }, userId: user.role === 'admin' ? user.id : { in: sourceUserIds } },
             select: { id: true, name: true },
         });
-        if (notebooks.length === 0) {
+        if (notebooks.length === 0 || notebooks.length !== new Set(subjectIds).size) {
             return badRequest("NO_SOURCE_ITEMS");
         }
 
         // 校验卷别分组属于当前用户
-        if (paperLevelIds && paperLevelIds.length > 0) {
+        if (user.role === 'admin' && paperLevelIds && paperLevelIds.length > 0) {
             const validGroups = await prisma.paperGroup.count({
                 where: { id: { in: paperLevelIds }, userId: user.id },
             });
@@ -101,13 +125,51 @@ export async function POST(req: Request) {
         const sources = await selectSourceItems(user.id, {
             subjectIds: notebooks.map((notebook) => notebook.id),
             tagNames,
-            paperLevelIds,
-            scope,
+            paperLevelIds: user.role === 'admin' ? paperLevelIds : undefined,
+            scope: user.role === 'admin' ? scope : 'all',
             count,
             pickRule,
-        });
+        }, user.role === 'admin' ? {} : { sourceUserIds });
         if (sources.length === 0) {
             return badRequest("NO_SOURCE_ITEMS");
+        }
+
+        if (user.role !== 'admin') {
+            const sourceItems = await prisma.errorItem.findMany({
+                where: { id: { in: sources.map((source) => source.id) }, userId: { in: sourceUserIds } },
+                select: { id: true, shortId: true, questionText: true, answerText: true, analysis: true, figureSvg: true },
+            });
+            const sourceById = new Map(sourceItems.map((item) => [item.id, item]));
+            const paper = await prisma.examPaper.create({
+                data: {
+                    userId: user.id,
+                    title: parsed.data.title || `${notebooks.map((notebook) => notebook.name).join('、')} ${formatDateTime(new Date(), 'yyyy-MM-dd HH:mm', getAppTimeZone())}`,
+                    scope: 'all',
+                    difficulty,
+                    requestedCount: sources.length,
+                    subjectIds: JSON.stringify(notebooks.map((notebook) => notebook.id)),
+                    tagNames: tagNames && tagNames.length > 0 ? JSON.stringify(tagNames) : null,
+                    status: 'ready',
+                    questions: {
+                        create: sources.flatMap((source, index) => {
+                            const item = sourceById.get(source.id);
+                            return item?.questionText && item.answerText ? [{
+                                order: index + 1,
+                                errorItemId: item.id,
+                                sourceShortId: item.shortId || item.id,
+                                status: 'ready',
+                                questionText: item.questionText,
+                                answerText: item.answerText,
+                                analysis: item.analysis,
+                                figureSvg: item.figureSvg,
+                            }] : [];
+                        }),
+                    },
+                },
+                select: { id: true, title: true, requestedCount: true, _count: { select: { questions: true } } },
+            });
+            if (paper._count.questions === 0) return badRequest("NO_SOURCE_ITEMS");
+            return NextResponse.json({ id: paper.id, title: paper.title, requestedCount: paper.requestedCount, questionCount: paper._count.questions }, { status: 201 });
         }
 
         const title = parsed.data.title

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Wand2 } from "lucide-react";
+import { FileText, Loader2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -19,10 +19,11 @@ const PICK_RULES: ExamPickRule[] = ["least_practiced", "random"];
 const DIFFICULTIES = ["easy", "medium", "hard", "harder"] as const;
 
 /** 新建试卷：选择错题本、范围、题量与难度 */
-export function ExamCreateForm() {
+export function ExamCreateForm({ isStudent }: { isStudent: boolean }) {
     const { t, language } = useLanguage();
     const router = useRouter();
     const [notebooks, setNotebooks] = useState<Notebook[]>([]);
+    const [notebooksLoaded, setNotebooksLoaded] = useState(false);
     const [subjectIds, setSubjectIds] = useState<string[]>([]);
     const [tagNames, setTagNames] = useState<string[]>([]);
     const [paperLevelIds, setPaperLevelIds] = useState<string[]>([]);
@@ -33,16 +34,18 @@ export function ExamCreateForm() {
     const [title, setTitle] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const { groups: paperGroups, loading: groupsLoading } = usePaperGroups();
+    const { groups: paperGroups, loading: groupsLoading } = usePaperGroups(!isStudent);
 
     useEffect(() => {
         apiClient.get<Notebook[]>("/api/notebooks")
             .then((data) => {
                 setNotebooks(data);
-                if (data.length === 1) setSubjectIds([data[0].id]);
+                if (isStudent) setSubjectIds(data.map((notebook) => notebook.id));
+                else if (data.length === 1) setSubjectIds([data[0].id]);
             })
-            .catch(() => setNotebooks([]));
-    }, []);
+            .catch(() => setNotebooks([]))
+            .finally(() => setNotebooksLoaded(true));
+    }, [isStudent]);
 
     const toggleNotebook = (id: string) => {
         setSubjectIds((prev) => (prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]));
@@ -62,14 +65,14 @@ export function ExamCreateForm() {
         setError(null);
         try {
             const paper = await apiClient.post<{ id: string }>("/api/exams", {
-                subjectIds,
-                tagNames,
-                paperLevelIds: paperLevelIds.length > 0 ? paperLevelIds : undefined,
-                scope,
-                pickRule,
+                subjectIds: isStudent ? notebooks.map((notebook) => notebook.id) : subjectIds,
+                tagNames: isStudent ? undefined : tagNames,
+                paperLevelIds: !isStudent && paperLevelIds.length > 0 ? paperLevelIds : undefined,
+                scope: isStudent ? "all" : scope,
+                pickRule: isStudent ? "random" : pickRule,
                 count,
-                difficulty,
-                title: title.trim() || undefined,
+                difficulty: isStudent ? "medium" : difficulty,
+                title: isStudent ? undefined : title.trim() || undefined,
                 language,
             });
             router.push(`/exams/${paper.id}`);
@@ -89,7 +92,7 @@ export function ExamCreateForm() {
             </CardHeader>
             <CardContent>
                 <form onSubmit={handleSubmit} className="space-y-5">
-                    <div className="space-y-2">
+                    {!isStudent && <div className="space-y-2">
                         <div className="flex items-center justify-between">
                             <Label>{t.exam.notebooks}</Label>
                             {notebooks.length > 1 && (
@@ -111,14 +114,14 @@ export function ExamCreateForm() {
                                 </label>
                             ))}
                         </div>
-                    </div>
+                    </div>}
 
-                    <div className="space-y-2">
+                    {!isStudent && <div className="space-y-2">
                         <Label>{t.exam.tags}</Label>
                         <TagInput value={tagNames} onChange={setTagNames} placeholder={t.exam.tagsPlaceholder} />
-                    </div>
+                    </div>}
 
-                    {!groupsLoading && paperGroups.filter((g) => g.isActive).length > 0 && (
+                    {!isStudent && !groupsLoading && paperGroups.filter((g) => g.isActive).length > 0 && (
                         <div className="space-y-2">
                             <Label>{t.filter.paperLevel}</Label>
                             <div className="flex flex-wrap gap-2">
@@ -140,8 +143,12 @@ export function ExamCreateForm() {
                         </div>
                     )}
 
-                    <div className="grid gap-4 sm:grid-cols-3">
-                        <div className="space-y-2">
+                    {isStudent && <p className="text-sm text-muted-foreground">
+                        {t.exam.sharedQuestionBank.replace("{count}", String(notebooks.length))}
+                    </p>}
+
+                    <div className={`grid gap-4 ${isStudent ? "sm:max-w-xs" : "sm:grid-cols-3"}`}>
+                        {!isStudent && <div className="space-y-2">
                             <Label>{t.exam.scope}</Label>
                             <div className="grid grid-cols-3 gap-1 rounded-md bg-muted p-1">
                                 {SCOPES.map((value) => (
@@ -155,7 +162,7 @@ export function ExamCreateForm() {
                                     </button>
                                 ))}
                             </div>
-                        </div>
+                        </div>}
                         <div className="space-y-2">
                             <Label htmlFor="exam-count">{t.exam.count}</Label>
                             <Input
@@ -167,7 +174,7 @@ export function ExamCreateForm() {
                                 onChange={(e) => setCount(Math.min(50, Math.max(1, parseInt(e.target.value, 10) || 1)))}
                             />
                         </div>
-                        <div className="space-y-2">
+                        {!isStudent && <div className="space-y-2">
                             <Label htmlFor="exam-difficulty">{t.exam.difficulty}</Label>
                             <select
                                 id="exam-difficulty"
@@ -179,10 +186,10 @@ export function ExamCreateForm() {
                                     <option key={value} value={value}>{difficultyLabels[value]}</option>
                                 ))}
                             </select>
-                        </div>
+                        </div>}
                     </div>
 
-                    <div className="space-y-2">
+                    {!isStudent && <div className="space-y-2">
                         <Label>{t.exam.pickRule}</Label>
                         <div className="grid grid-cols-2 gap-1 rounded-md bg-muted p-1 sm:max-w-sm">
                             {PICK_RULES.map((value) => (
@@ -197,18 +204,18 @@ export function ExamCreateForm() {
                             ))}
                         </div>
                         <p className="text-xs text-muted-foreground">{t.exam.pickRuleHints[pickRule]}</p>
-                    </div>
+                    </div>}
 
-                    <div className="space-y-2">
+                    {!isStudent && <div className="space-y-2">
                         <Label htmlFor="exam-title">{t.exam.titleLabel}</Label>
                         <Input id="exam-title" value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} />
-                    </div>
+                    </div>}
 
                     {error && <p className="text-sm text-destructive">{error}</p>}
 
-                    <Button type="submit" disabled={submitting} className="w-full sm:w-auto">
-                        {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />}
-                        {submitting ? t.exam.creating : t.exam.generate}
+                    <Button type="submit" disabled={submitting || (isStudent && !notebooksLoaded)} className="w-full sm:w-auto">
+                        {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : isStudent ? <FileText className="mr-2 h-4 w-4" /> : <Wand2 className="mr-2 h-4 w-4" />}
+                        {submitting ? t.exam.creating : isStudent ? t.exam.create : t.exam.generate}
                     </Button>
                 </form>
             </CardContent>

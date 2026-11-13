@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { unauthorized } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { getAIService } from "@/lib/ai";
 import { consumeAiQuota } from "@/lib/ai-quota";
 import { withRecoverableResponse } from "@/lib/recoverable-response";
@@ -37,8 +37,9 @@ async function handlePost(req: Request) {
         if (limited) return limited;
 
         const aiService = getAIService();
-        const result = await trackBackgroundTask(
-            { userId: session.user.id, kind: 'geogebra', subject: describeQuestion({ questionText }) },
+        const result = await trackBackgroundTaskForRequest(
+            req,
+            { userId: session.user.id, kind: 'geogebra', subject: describeQuestion({ questionText }), retryRequest: { path: '/api/geogebra-analyze', body: { questionText, answerText: answerText || '', analysis: analysis || '' } } },
             () => aiService.analyzeForGeogebra(questionText, answerText || "", analysis || "")
         );
 

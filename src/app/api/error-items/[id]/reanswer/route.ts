@@ -4,7 +4,7 @@ import { getAIService } from "@/lib/ai";
 import { getCurrentUser } from "@/lib/current-user";
 import { unauthorized, notFound, badRequest, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { resolveNotebookScope, SUBJECT_DISPLAY_NAMES } from "@/lib/notebook-scope";
 import { consumeAiQuota } from "@/lib/ai-quota";
 import { withRecoverableResponse } from "@/lib/recoverable-response";
@@ -57,8 +57,9 @@ async function handlePost(
         const limited = await consumeAiQuota(user, 'reanswer');
         if (limited) return limited;
 
-        const result = await trackBackgroundTask(
-            { userId: user.id, kind: 'reanswer', subject: describeQuestion(item), link: `/error-items/${id}` },
+        const result = await trackBackgroundTaskForRequest(
+            req,
+            { userId: user.id, kind: 'reanswer', subject: describeQuestion(item), link: `/error-items/${id}`, retryRequest: { path: `/api/error-items/${id}/reanswer`, body: { language } } },
             () => getAIService().reanswerQuestion(questionText, language, subject, image, item.gradeSemester)
         );
         if (!result.answerText.trim() && !result.analysis.trim()) {

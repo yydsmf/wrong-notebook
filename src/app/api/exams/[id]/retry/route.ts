@@ -26,6 +26,7 @@ export async function POST(
         if (!user) {
             return unauthorized("Authentication required");
         }
+        if (user.role !== 'admin') return notFound("Exam paper not found");
 
         const paper = await prisma.examPaper.findUnique({ where: { id }, select: { userId: true } });
         if (!paper || paper.userId !== user.id) {

@@ -84,6 +84,13 @@ export async function GET(req: Request) {
             where: userFilter,
         });
 
+        // 普通用户的答题记录与管理员题库分离，备份时一并保存；管理员全量备份包含所有学生记录。
+        const studentSubmissions = await prisma.studentSubmission.findMany({
+            where: userFilter,
+            include: { answers: true },
+            orderBy: { createdAt: 'asc' },
+        });
+
         // 与动画讲解文字一致的云端语音（MP3），导入后无需重新合成
         const ttsSpeeches = await exportSpeeches(errorItems.flatMap((item) => [
             ...(item.svgAnimation ? [{ language: 'zh' as const, svg: item.svgAnimation }] : []),
@@ -91,7 +98,7 @@ export async function GET(req: Request) {
         ]));
 
         const exportData = {
-            version: 4,
+            version: 6,
             exportedAt: new Date().toISOString(),
             scope: exportAll ? 'all' : 'user',
             user: {
@@ -131,6 +138,7 @@ export async function GET(req: Request) {
                 })),
             })),
             paperGroups,
+            studentSubmissions,
             ttsSpeeches,
         };
 
@@ -144,6 +152,7 @@ export async function GET(req: Request) {
             reviewSchedulesCount: reviewSchedules.length,
             practiceRecordsCount: practiceRecords.length,
             examPapersCount: examPapers.length,
+            studentSubmissionsCount: studentSubmissions.length,
             ttsSpeechesCount: ttsSpeeches.length,
         }, 'Data export completed');
 

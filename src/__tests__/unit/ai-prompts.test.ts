@@ -39,12 +39,24 @@ describe('AI Prompts', () => {
     });
 
     describe('generateAnalyzePrompt', () => {
-        it('要求判断是否有配图并用 SVG 重绘', () => {
+        it('要求判断是否有配图并输出文字图示说明，不在识题阶段重绘 SVG', () => {
             const prompt = generateAnalyzePrompt('zh', 7, '数学');
             expect(prompt).toContain('<has_figure>');
-            expect(prompt).toContain('<figure_svg>');
+            expect(prompt).toContain('<figure_description>');
+            expect(prompt).not.toContain('<figure_svg>');
             expect(prompt).toContain('13 个 XML 标签');
-            expect(prompt).toContain('严禁使用 <image>、<script>');
+            expect(prompt).toContain('有配图时输出 figure_description');
+            expect(prompt).toContain('图片写“1分米”时必须写“1分米”');
+            expect(prompt).toContain('先判断图片是否旋转、倒置或倾斜');
+            expect(prompt).toContain('原图没有括号时才写作 $\\frac{\\square}{\\square}$');
+            expect(prompt).toContain('括号内有手写数字，清除数字后必须写作 $\\frac{(\\square)}{(\\square)}$');
+            expect(prompt).toContain('不要写成 $\\frac{____}{____}$');
+            expect(prompt).toContain('不能因过滤手写内容而删除分数线、括号、上下排列');
+            expect(prompt).toContain('原图分数线上下分别印有括号');
+            expect(prompt).toContain('$\\frac{(\\square)}{(\\square)}$');
+            expect(prompt).toContain('先辨认原图中印刷的空格结构，再只移除');
+            expect(prompt).toContain('逐项对照原图复核每个空格的括号');
+            expect(prompt).toContain('普通横向填空');
         });
 
         it('单独重绘配图的提示词带上题干用于核对标注', () => {

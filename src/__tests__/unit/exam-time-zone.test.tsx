@@ -11,6 +11,7 @@ import { translations } from '@/lib/translations';
 
 vi.mock('next/navigation', () => ({ useParams: () => ({ id: 'paper-1' }), useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('next/link', () => ({ default: ({ children, href }: { children: ReactNode; href: string }) => <a href={href}>{children}</a> }));
+vi.mock('next-auth/react', () => ({ useSession: () => ({ data: { user: { role: 'admin' } } }) }));
 vi.mock('@/components/ui/back-button', () => ({ BackButton: () => null }));
 vi.mock('@/components/exam/exam-question-card', () => ({
     ExamQuestionCard: ({ onResultChange }: { onResultChange?: (result: 'correct') => void }) => <button onClick={() => onResultChange?.('correct')}>选择做对</button>,

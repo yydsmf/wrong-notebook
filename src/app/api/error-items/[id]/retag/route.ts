@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/lib/current-user";
 import { prisma } from "@/lib/prisma";
 import { unauthorized, notFound, badRequest, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { previewRetagErrorItem, retagErrorItem } from "@/lib/retag";
 import { consumeAiQuota } from "@/lib/ai-quota";
 import { withRecoverableResponse } from "@/lib/recoverable-response";
@@ -35,8 +35,9 @@ async function handlePost(
         const limited = await consumeAiQuota(user, 'retag');
         if (limited) return limited;
 
-        const result = await trackBackgroundTask(
-            { userId: user.id, kind: 'retag', subject: describeQuestion(item), link: `/error-items/${id}` },
+        const result = await trackBackgroundTaskForRequest(
+            req,
+            { userId: user.id, kind: 'retag', subject: describeQuestion(item), link: `/error-items/${id}`, retryRequest: { path: `/api/error-items/${id}/retag`, body: {} } },
             () => body.preview === true ? previewRetagErrorItem(id, user.id) : retagErrorItem(id, user.id)
         );
         return NextResponse.json(result);

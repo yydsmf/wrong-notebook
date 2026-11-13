@@ -10,6 +10,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { FigureScaleEditor } from "@/components/error-detail/figure-scale-editor";
 import { ExamFigureScaleBar } from "@/components/exam/exam-figure-scale-bar";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { QuestionTextRenderer } from "@/components/question-text-renderer";
 import { AnswerSpaceControl } from "@/components/print-preview/answer-space-control";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { usePageTitle } from "@/lib/page-title";
@@ -87,7 +88,7 @@ export default function ExamPrintPage() {
     if (!paper) return <div className="p-8 text-center">{t.common.loading}</div>;
 
     const questions = paper.questions.filter((question) => question.status === "ready" && question.questionText);
-    const figureQuestions = questions.filter((question) => Boolean(question.figureSvg));
+    const figureQuestions = questions.filter((question) => Boolean(question.figureSvg) || Boolean(question.imageFragments?.length));
 
     const saveQuestionFigureScale = async (questionId: string, figureScale: number, figureAlign: FigureAlign) => {
         await apiClient.patch(`/api/exams/${paper.id}`, { questionId, figureScale, figureAlign });
@@ -192,10 +193,11 @@ export default function ExamPrintPage() {
                             <span>{index + 1}.</span>
                             <span className="exam-source">{t.exam.sourceLabel}: {question.sourceShortId}</span>
                         </div>
-                        <MarkdownRenderer content={question.questionText!} />
+                        <QuestionTextRenderer content={question.questionText!} />
                         <FigureScaleEditor
                             key={`${question.id}-${question.figureScale ?? 100}-${question.figureAlign ?? "center"}`}
                             svg={question.figureSvg}
+                            images={question.imageFragments}
                             scale={question.figureScale}
                             align={question.figureAlign}
                             previewScaleOverride={uniformPreview.scale}

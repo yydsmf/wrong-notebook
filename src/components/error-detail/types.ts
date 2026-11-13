@@ -32,6 +32,7 @@ export interface ErrorItemDetail {
     difficultyStars?: number | null;
     hasFigure?: boolean;
     figureSvg?: string | null;
+    imageFragments?: string | null;
     figureScale?: number;
     figureAlign?: 'left' | 'center' | 'right' | string;
     geogebraCommands?: string | null;

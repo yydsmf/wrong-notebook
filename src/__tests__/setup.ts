@@ -3,6 +3,9 @@
  */
 import { vi, beforeEach, afterEach } from 'vitest';
 
+// 本机继承的 RUST_LOG=warn 会使 Prisma 5 的迁移引擎退出，macOS 测试子进程固定使用 trace。
+if (process.platform === 'darwin') process.env.RUST_LOG = 'trace';
+
 // Mock localStorage for tests that need it
 const localStorageMock = (() => {
     let store: Record<string, string> = {};

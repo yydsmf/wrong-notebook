@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { MarkdownRenderer } from '@/components/markdown-renderer';
+import { QuestionTextRenderer } from '@/components/question-text-renderer';
 
 describe('旧题缺少答案或解析时的详情渲染', () => {
     it.each([null, undefined, ''])('内容为 %s 时能正常显示空区域', (content) => {
@@ -45,6 +46,71 @@ describe('LaTeX 公式渲染', () => {
     it('还原公式内被二次转义的命令，保留换行符 \\\\', () => {
         expect(annotations('$\\\\frac{1}{2}$')).toEqual(['\\frac{1}{2}']);
         expect(annotations('$\\begin{cases}a\\\\\\end{cases}$')).toEqual(['\\begin{cases}a\\\\\\end{cases}']);
+    });
+
+    it('题目填空下划线和数学乘号按字面显示，不被 Markdown 当成强调语法', () => {
+        const html = renderToStaticMarkup(
+            <MarkdownRenderer content={'诗句："____"；志士"____"；陆游"____"。计算 3*4*5、3*4+5*6 和 a*b-c*d。'} />,
+        );
+        expect((html.match(/____/g) || [])).toHaveLength(3);
+        expect(html).toContain('3*4*5');
+        expect(html).toContain('3*4+5*6');
+        expect(html).toContain('a*b-c*d');
+        expect(html).not.toContain('<strong><strong>');
+        expect(html).not.toContain('<em>');
+    });
+
+    it('两个下划线被逗号或顿号分隔时仍按填空线显示', () => {
+        const html = renderToStaticMarkup(
+            <MarkdownRenderer content={'古往今来写下诗篇："__，__"；"__,__"；"__、__"。'} />,
+        );
+        expect((html.match(/__/g) || [])).toHaveLength(6);
+        expect(html).not.toContain('<strong>');
+    });
+
+    it('保护行首比较符号，同时保留引用、粗体、代码和公式的 Markdown 渲染', () => {
+        const html = renderToStaticMarkup(
+            <MarkdownRenderer content={'>5 的数有哪些？\n\n> 这是引用\n\n**重点** __术语__ `3*4*5 ____`\n\n$3*4*5$'} />,
+        );
+        expect(html).toContain('&gt;5 的数有哪些？');
+        expect(html).toContain('<blockquote class="border-l-4');
+        expect(html).toContain('<strong class="font-bold">重点</strong>');
+        expect(html).toContain('<strong class="font-bold">术语</strong>');
+        expect(html).toContain('<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono ">3*4*5 ____</code>');
+        expect(countFormulas('$3*4*5$')).toBe(1);
+    });
+});
+
+describe('题干原文渲染', () => {
+    it('标点两侧的填空线、Markdown 符号和普通文字均按原文显示', () => {
+        const html = renderToStaticMarkup(
+            <QuestionTextRenderer content={'古往今来写下诗篇："__，__"；"__,__"；"__、__"。数学 3*4*5，重点 **不改写**。\\n照录字面。'} />,
+        );
+        expect(html).toContain('__，__');
+        expect(html).toContain('__,__');
+        expect(html).toContain('__、__');
+        expect(html).toContain('3*4*5');
+        expect(html).toContain('**不改写**');
+        expect(html).toContain('\\n照录字面。');
+        expect(html).not.toContain('<strong>');
+    });
+
+    it('只渲染显式定界的公式，且保留公式旁边的填空线', () => {
+        const html = renderToStaticMarkup(
+            <QuestionTextRenderer content={'计算 $3\\times 4$，结果为__，单位是 cm。'} />,
+        );
+        expect(html).toContain('class="katex"');
+        expect(html).toContain('__');
+        expect(html).toContain('，单位是 cm。');
+    });
+
+    it('上下结构的分数填空保留分数线和分子、分母空框', () => {
+        const html = renderToStaticMarkup(
+            <QuestionTextRenderer content={'甲比乙少$\\frac{\\square}{\\square}$。'} />,
+        );
+        expect(html).toContain('class="katex"');
+        expect(annotations('甲比乙少$\\frac{\\square}{\\square}$。')).toEqual(['\\frac{\\square}{\\square}']);
+        expect(html).toContain('甲比乙少');
     });
 });
 

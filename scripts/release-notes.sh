@@ -50,5 +50,5 @@ fi
 echo "$notes"
 if [[ -n "$prev" ]]; then
     echo
-    echo "**完整变更**：https://github.com/margrop/wrong-notebook/compare/$prev...$tag"
+    echo "**完整变更**：https://github.com/yydsmf/wrong-notebook/compare/$prev...$tag"
 fi

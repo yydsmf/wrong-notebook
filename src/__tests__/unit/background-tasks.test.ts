@@ -4,14 +4,21 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     clearFinishedBackgroundTasks,
+    beginBackgroundTaskRetry,
+    completeBackgroundTaskRetry,
     describeQuestion,
     FINISHED_TASK_TTL_MS,
+    finishBackgroundTaskRetry,
     flushBackgroundTasksForTest,
     listBackgroundTasks,
     resetBackgroundTasksForTest,
     SERVER_RESTARTED,
     startBackgroundTask,
+    trackBackgroundTaskForRequest,
     trackBackgroundTask,
+    BACKGROUND_TASK_REPLAY_HEADER,
+    BACKGROUND_TASK_REPLAY_ID_HEADER,
+    BACKGROUND_TASK_REPLAY_TOKEN,
 } from '@/lib/background-tasks';
 
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
@@ -34,6 +41,45 @@ describe('后台事务登记', () => {
     it('失败时记录错误码并继续抛出', async () => {
         await expect(trackBackgroundTask({ userId: 'u1', kind: 'reanswer' }, async () => { throw new Error('AI_RESPONSE_ERROR: 格式不对'); })).rejects.toThrow('AI_RESPONSE_ERROR');
         expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'failed', error: 'AI_RESPONSE_ERROR' });
+    });
+
+    it('只允许任务所有者重试，重试期间锁定，失败可再次重试', () => {
+        const task = startBackgroundTask({
+            userId: 'u1',
+            kind: 'analyze',
+            retryRequest: { path: '/api/analyze', body: { imageBase64: 'private-image' } },
+        });
+        task.fail(new Error('AI_TIMEOUT_ERROR'));
+
+        expect(beginBackgroundTaskRetry('u2', task.id)).toBeNull();
+        expect(beginBackgroundTaskRetry('u1', task.id)).toEqual({ path: '/api/analyze', body: { imageBase64: 'private-image' } });
+        expect(beginBackgroundTaskRetry('u1', task.id)).toBeNull();
+        expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'running', canRetry: false, error: null });
+
+        finishBackgroundTaskRetry('u1', task.id, new Error('AI_CONNECTION_FAILED'));
+        expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'failed', canRetry: true, error: 'AI_CONNECTION_FAILED' });
+        expect(beginBackgroundTaskRetry('u1', task.id)).not.toBeNull();
+        expect(completeBackgroundTaskRetry('u1', task.id)).toBe(true);
+        expect(listBackgroundTasks('u1')).toEqual([]);
+    });
+
+    it('重放请求更新原任务的批量进度，不创建重复任务', async () => {
+        const task = startBackgroundTask({ userId: 'u1', kind: 'tts_voice', total: 3, retryRequest: { path: '/api/tts/batch' } });
+        task.fail(new Error('AI_TIMEOUT_ERROR'));
+        beginBackgroundTaskRetry('u1', task.id);
+        const req = new Request('http://localhost/api/tts/batch', {
+            headers: {
+                [BACKGROUND_TASK_REPLAY_HEADER]: BACKGROUND_TASK_REPLAY_TOKEN,
+                [BACKGROUND_TASK_REPLAY_ID_HEADER]: task.id,
+            },
+        });
+
+        await trackBackgroundTaskForRequest(req, { userId: 'u1', kind: 'tts_voice' }, async (retryTask) => {
+            retryTask.setProgress(2, 3, 1);
+        });
+
+        expect(listBackgroundTasks('u1')).toHaveLength(1);
+        expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'running', progress: { done: 2, total: 3, failed: 1 } });
     });
 
     it('批量事务记录进度，结束后状态不再改变', () => {
@@ -126,6 +172,23 @@ describe('后台事务持久化', () => {
 
         vi.advanceTimersByTime(1000);
         expect(JSON.parse(readFileSync(file, 'utf8'))[0]).toMatchObject({ userId: 'u1', progress: { done: 2, total: 3 } });
+    });
+
+    it('持久化任务历史时不写入重试请求或图片', () => {
+        const task = startBackgroundTask({
+            userId: 'u1',
+            kind: 'analyze',
+            retryRequest: { path: '/api/analyze', body: { imageBase64: 'private-image' } },
+        });
+        task.fail(new Error('AI_TIMEOUT_ERROR'));
+        flushBackgroundTasksForTest();
+
+        const saved = JSON.parse(readFileSync(file, 'utf8'))[0];
+        expect(saved).not.toHaveProperty('retryRequest');
+        expect(JSON.stringify(saved)).not.toContain('private-image');
+
+        resetBackgroundTasksForTest({ file });
+        expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'failed', canRetry: false });
     });
 
     it('文件损坏或格式不对时忽略，不影响登记新事务', () => {

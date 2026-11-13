@@ -8,6 +8,7 @@ import { ChevronDown, ChevronUp, Loader2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { QuestionTextRenderer } from "@/components/question-text-renderer";
 import { RESULT_BADGE_CLASS } from "@/components/mastery-panel";
 import { PracticeResultPicker } from "@/components/practice-result-picker";
 import { QuestionFigure } from "@/components/question-figure";
@@ -109,11 +110,12 @@ export function ExamQuestionCard({
                 )}
                 {question.status === "ready" && question.questionText && (
                     <>
-                        <MarkdownRenderer content={question.questionText} />
+                        <QuestionTextRenderer content={question.questionText} />
                         {onSaveFigureScale ? (
                             <FigureScaleEditor
                                 key={`${question.id}-${question.figureScale ?? 100}-${question.figureAlign ?? "center"}`}
                                 svg={question.figureSvg}
+                                images={question.imageFragments}
                                 scale={question.figureScale}
                                 align={question.figureAlign}
                                 previewScaleOverride={previewFigureScale}
@@ -123,6 +125,7 @@ export function ExamQuestionCard({
                         ) : (
                             <QuestionFigure
                                 svg={question.figureSvg}
+                                images={question.imageFragments}
                                 scale={previewFigureScale ?? question.figureScale}
                                 align={previewFigureAlign ?? question.figureAlign}
                             />

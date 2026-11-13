@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { QuestionTextRenderer } from "@/components/question-text-renderer";
 import { PracticeRecordForm } from "@/components/practice-record-form";
 import { QuestionFigure } from "@/components/question-figure";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -175,7 +176,7 @@ export function MasteryPanel({ errorItemId, onMasteryStatusChange }: MasteryPane
                                     </div>
                                     {expanded === record.id && record.questionText && (
                                         <div className="space-y-2 rounded-md bg-muted/40 p-3">
-                                            <MarkdownRenderer content={record.questionText} />
+                                            <QuestionTextRenderer content={record.questionText} />
                                             <QuestionFigure svg={record.figureSvg} />
                                             {record.wrongAnswerText && (
                                                 <div className="border-t pt-2">

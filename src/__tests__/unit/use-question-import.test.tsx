@@ -75,9 +75,9 @@ describe('题目导入流程', () => {
         await render({ analyzeSubjectId: 'nb-1', importSubjectId: 'nb-1', onParsed });
 
         await act(async () => flow.cropComplete(new Blob(['x'])));
-        await act(async () => {});
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
 
-        expect(mocks.post).toHaveBeenCalledWith('/api/analyze', expect.objectContaining({ imageBase64: 'data:image/jpeg;base64,AAAA', subjectId: 'nb-1' }), { timeout: 120000, recoverable: true });
+        expect(mocks.post).toHaveBeenCalledWith('/api/analyze', expect.objectContaining({ imageBase64: 'data:image/jpeg;base64,AAAA', subjectId: 'nb-1', returnPath: '/?notebook=nb-1' }), expect.objectContaining({ timeout: 120000, recoverable: true, onProgress: expect.any(Function) }));
         expect(mocks.saveParsedQuestion).toHaveBeenCalledWith(parsed, { subjectId: 'nb-1', imageUrl: 'data:image/jpeg;base64,AAAA' });
         expect(flow.lastImported).toEqual({ id: 'saved', duplicate: false });
         expect(flow.step).toBe('upload');
@@ -92,7 +92,7 @@ describe('题目导入流程', () => {
         await render({ fixedSubjectId: 'nb-2', onParsed });
 
         await act(async () => flow.cropComplete(new Blob(['x'])));
-        await act(async () => {});
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
         expect(flow.step).toBe('review');
         expect(flow.parsedData).toEqual(parsed);
         expect(flow.currentImage).toBe('data:image/jpeg;base64,AAAA');
@@ -103,6 +103,42 @@ describe('题目导入流程', () => {
         expect(mocks.post).toHaveBeenLastCalledWith('/api/error-items', expect.objectContaining({ subjectId: 'nb-2', originalImageUrl: 'data:image/jpeg;base64,AAAA' }));
         expect(mocks.push).toHaveBeenCalledWith('/notebooks/nb-2');
         expect(flow.step).toBe('upload');
+    });
+
+    it('从后台任务恢复的识别结果进入原校对页，不受当前偏好加载时序影响', async () => {
+        const onParsed = vi.fn();
+        sessionStorage.setItem('background-task-retry-import', JSON.stringify({
+            parsedData: parsed,
+            imageBase64: 'data:image/jpeg;base64,RETRIED',
+            subjectId: 'nb-4',
+            confirmBeforeImport: true,
+        }));
+
+        await render({ fixedSubjectId: 'nb-4', onParsed });
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+
+        expect(flow.step).toBe('review');
+        expect(flow.parsedData).toEqual(parsed);
+        expect(flow.currentImage).toBe('data:image/jpeg;base64,RETRIED');
+        expect(onParsed).toHaveBeenCalledWith(parsed);
+        expect(sessionStorage.getItem('background-task-retry-import')).toBeNull();
+        expect(mocks.saveParsedQuestion).not.toHaveBeenCalled();
+    });
+
+    it('后台识别重试关闭人工确认时调用原有直接保存流程', async () => {
+        sessionStorage.setItem('background-task-retry-import', JSON.stringify({
+            parsedData: parsed,
+            imageBase64: 'data:image/jpeg;base64,RETRIED',
+            subjectId: 'nb-4',
+            confirmBeforeImport: false,
+        }));
+
+        await render({ importSubjectId: 'nb-4' });
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+
+        expect(mocks.saveParsedQuestion).toHaveBeenCalledWith(parsed, { subjectId: 'nb-4', imageUrl: 'data:image/jpeg;base64,RETRIED' });
+        expect(flow.step).toBe('upload');
+        expect(flow.lastImported).toEqual({ id: 'saved', duplicate: false });
     });
 
     it('保存时识别为重复题则跳到原题', async () => {
@@ -145,7 +181,7 @@ describe('题目导入流程', () => {
         await render({ textNotebook: { id: 'nb-3', name: '数学' } });
 
         await act(async () => { await flow.submitText('1 + 1 = ?'); });
-        expect(mocks.post).toHaveBeenCalledWith('/api/reanswer', expect.objectContaining({ questionText: '1 + 1 = ?', subject: '数学', subjectId: 'nb-3' }), { timeout: 120000, recoverable: true });
+        expect(mocks.post).toHaveBeenCalledWith('/api/reanswer', expect.objectContaining({ questionText: '1 + 1 = ?', subject: '数学', subjectId: 'nb-3' }), expect.objectContaining({ timeout: 120000, recoverable: true, onProgress: expect.any(Function) }));
         expect(flow.parsedData).toMatchObject({ questionText: '1 + 1 = ?', mistakeStatus: 'unknown', subject: '其他' });
         expect(flow.currentImage).toBeNull();
     });

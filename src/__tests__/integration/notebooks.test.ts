@@ -54,6 +54,7 @@ describe('/api/notebooks', () => {
         id: 'user-123',
         email: 'user@example.com',
         name: 'Test User',
+        role: 'admin',
     };
 
     beforeEach(() => {
@@ -251,6 +252,7 @@ describe('/api/notebooks', () => {
                 name: '数学',
                 userId: 'user-123',
                 _count: { errorItems: 10 },
+                user: { role: 'admin' },
             };
             mocks.mockPrismaSubject.findUnique.mockResolvedValue(notebook);
 
@@ -279,6 +281,7 @@ describe('/api/notebooks', () => {
                 id: 'nb-1',
                 name: '数学',
                 userId: 'other-user-id', // 不同的用户
+                user: { role: 'admin' },
             };
             mocks.mockPrismaSubject.findUnique.mockResolvedValue(notebook);
 

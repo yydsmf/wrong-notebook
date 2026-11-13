@@ -32,7 +32,7 @@ describe('耗时请求响应暂存', () => {
         let finish!: () => void;
         const pending = call(() => new Promise((resolve) => { finish = () => resolve(NextResponse.json({ svgAnimation: '<svg/>' })); }));
 
-        expect(await (await lookup()).json()).toEqual({ state: 'running' });
+        expect(await (await lookup()).json()).toEqual({ state: 'running', progress: { stage: 'requesting', percent: 10 } });
 
         finish();
         const response = await pending;

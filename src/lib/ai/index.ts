@@ -11,6 +11,7 @@ export * from "./types";
 
 import { getAppConfig, getActiveOpenAIConfig } from "../config";
 import { createLogger } from "../logger";
+import type { RequestProgress } from "../request-progress";
 
 const logger = createLogger('ai');
 
@@ -20,12 +21,12 @@ function concurrencyKey(provider: string, baseUrl: string | undefined, model: st
 }
 
 /** 当前配置的 AI 服务，所有调用受同一模型的并发上限约束 */
-export function getAIService(): AIService {
-    const { service, key } = createAIService();
+export function getAIService(options?: { onProgress?: (progress: RequestProgress) => void }): AIService {
+    const { service, key } = createAIService(options);
     return limitModelConcurrency(service, key);
 }
 
-function createAIService(): { service: AIService; key: string } {
+function createAIService(options?: { onProgress?: (progress: RequestProgress) => void }): { service: AIService; key: string } {
     // Always get fresh config
     const config = getAppConfig();
     const provider = config.aiProvider;
@@ -33,7 +34,7 @@ function createAIService(): { service: AIService; key: string } {
     if (provider === "openai") {
         const activeConfig = getActiveOpenAIConfig();
         logger.info({ activeInstance: activeConfig?.name }, 'Using OpenAI Provider');
-        return { service: new OpenAIProvider(activeConfig), key: concurrencyKey(provider, activeConfig?.baseUrl, activeConfig?.model) };
+        return { service: new OpenAIProvider(activeConfig ? { ...activeConfig, onProgress: options?.onProgress } : undefined), key: concurrencyKey(provider, activeConfig?.baseUrl, activeConfig?.model) };
     } else if (provider === "azure") {
         logger.info({ deployment: config.azure?.deploymentName }, 'Using Azure OpenAI Provider');
         return { service: new AzureOpenAIProvider(config.azure), key: concurrencyKey(provider, config.azure?.endpoint, config.azure?.deploymentName) };
@@ -51,6 +52,6 @@ function createAIService(): { service: AIService; key: string } {
         const vendor = isVendorProvider(provider) ? provider : 'minimax';
         const vendorConfig = resolveVendorConfig(vendor, config[vendor]);
         logger.info({ vendor: VENDOR_PRESETS[vendor].name, model: vendorConfig.model }, 'Using vendor provider (OpenAI compatible)');
-        return { service: new OpenAIProvider(vendorConfig), key: concurrencyKey(vendor, vendorConfig.baseUrl, vendorConfig.model) };
+        return { service: new OpenAIProvider({ ...vendorConfig, onProgress: options?.onProgress }), key: concurrencyKey(vendor, vendorConfig.baseUrl, vendorConfig.model) };
     }
 }

@@ -93,7 +93,7 @@ function HomeContent() {
 
     return (
         <main className="min-h-screen">
-            <ProgressFeedback status={flow.analysisStep} />
+            <ProgressFeedback status={flow.analysisStep} timeoutMs={flow.aiTimeout} progress={flow.analysisProgress} />
 
             <div className={`mx-auto space-y-6 px-4 py-6 md:px-8 md:py-8 ${flow.step === "review" ? "max-w-6xl" : "max-w-4xl"}`}>
                 <QuestionSaveError message={flow.saveError} onDismiss={flow.dismissSaveError} />
@@ -142,11 +142,13 @@ function HomeContent() {
 
                 {flow.croppingImage && (
                     <ImageCropper
+                        key={flow.croppingImage}
                         imageSrc={flow.croppingImage}
                         open={flow.isCropperOpen}
                         onClose={flow.closeCropper}
                         onCropComplete={flow.cropComplete}
                         onMultiCropComplete={flow.startBatch}
+                        onRegionsSelected={flow.cropRegions}
                     />
                 )}
 

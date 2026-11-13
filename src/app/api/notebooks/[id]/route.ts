@@ -29,7 +29,6 @@ export async function GET(
         if (!user) {
             return unauthorized("Authentication required");
         }
-
         const notebook = await prisma.subject.findUnique({
             where: { id },
             include: {
@@ -38,6 +37,7 @@ export async function GET(
                         errorItems: true,
                     },
                 },
+                user: { select: { role: true } },
             },
         });
 
@@ -45,11 +45,12 @@ export async function GET(
             return notFound("Notebook not found");
         }
 
-        if (notebook.userId !== user.id) {
+        if (user.role === 'admin' ? notebook.userId !== user.id : notebook.user.role !== 'admin') {
             return forbidden("Not authorized to access this notebook");
         }
 
-        return NextResponse.json(notebook);
+        const { user: _owner, ...publicNotebook } = notebook;
+        return NextResponse.json(publicNotebook);
     } catch (error) {
         logger.error({ error }, 'Error fetching notebook');
         return internalError("Failed to fetch notebook");
@@ -78,6 +79,7 @@ export async function PUT(
         if (!user) {
             return unauthorized("Authentication required");
         }
+        if (user.role !== 'admin') return forbidden("Admin role required");
 
         const notebook = await prisma.subject.findUnique({
             where: { id },
@@ -141,6 +143,7 @@ export async function DELETE(
         if (!user) {
             return unauthorized("Authentication required");
         }
+        if (user.role !== 'admin') return forbidden("Admin role required");
 
         const notebook = await prisma.subject.findUnique({
             where: { id },

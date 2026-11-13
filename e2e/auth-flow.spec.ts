@@ -71,8 +71,8 @@ test.describe('Authentication Flow', () => {
         await page.locator('button[type="submit"]').click();
 
         // --- Verify Success ---
-        // Wait for redirect to home
-        await page.waitForURL('/', { timeout: 10000 });
+        // 普通用户登录后进入复习页。
+        await page.waitForURL('**/review', { timeout: 10000 });
 
         // Verify Content
         await expect(page.locator('body')).toContainText(user.name);

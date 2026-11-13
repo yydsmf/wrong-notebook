@@ -78,6 +78,7 @@ describe('proxy', () => {
             sub: 'user-123',
             email: 'test@example.com',
             name: 'Test User',
+            role: 'admin',
         };
 
         it('应该允许已认证用户访问受保护页面', async () => {
@@ -119,6 +120,22 @@ describe('proxy', () => {
             const response = await proxy(req);
 
             expect(response).toBeUndefined();
+        });
+
+        it('普通用户首页与管理页面统一返回复习页，且只能读取共享错题本', async () => {
+            vi.mocked(getToken).mockResolvedValue({ ...mockToken, role: 'user' } as unknown as JWT);
+
+            const home = await proxy(new NextRequest('http://localhost:3000/'));
+            expect(home?.headers.get('location')).toBe('http://localhost:3000/review');
+
+            const notebookRead = await proxy(new NextRequest('http://localhost:3000/api/notebooks'));
+            expect(notebookRead).toBeUndefined();
+
+            const notebookWrite = await proxy(new NextRequest('http://localhost:3000/api/notebooks', { method: 'POST' }));
+            expect(notebookWrite?.status).toBe(403);
+
+            const aiTest = await proxy(new NextRequest('http://localhost:3000/api/ai/test', { method: 'POST' }));
+            expect(aiTest?.status).toBe(403);
         });
     });
 

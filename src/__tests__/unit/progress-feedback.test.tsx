@@ -25,9 +25,9 @@ afterEach(async () => {
     vi.unstubAllGlobals();
 });
 
-async function renderStatus(status: ProgressStatus) {
+async function renderStatus(status: ProgressStatus, timeoutMs?: number, progress?: number) {
     await act(async () => root.render(
-        <StrictMode><LanguageProvider><ProgressFeedback status={status} /></LanguageProvider></StrictMode>,
+        <StrictMode><LanguageProvider><ProgressFeedback status={status} timeoutMs={timeoutMs} progress={progress} /></LanguageProvider></StrictMode>,
     ));
 }
 
@@ -45,8 +45,8 @@ describe('按阶段估算进度并显示实际用时', () => {
     it.each([
         ['compressing', '10', '正在准备图片...'],
         ['uploading', '20', '正在上传...'],
-        ['analyzing', '50', '等待 AI 返回分析结果...'],
-        ['processing', '85', '正在处理结果...'],
+        ['analyzing', '25', 'AI 正在读取题目并生成解析...'],
+        ['processing', '85', '正在整理分析结果...'],
         ['saving', '95', '正在保存...'],
     ] as const)('%s 阶段显示估算值 %s%% 和对应状态', async (status, percent, message) => {
         await renderStatus(status);
@@ -57,13 +57,19 @@ describe('按阶段估算进度并显示实际用时', () => {
         expect(elapsed()).toBe('已用时：00:00');
     });
 
-    it('长时间等待 AI 时只增加已用时间，百分比保持当前阶段估值', async () => {
-        await renderStatus('analyzing');
+    it('等待 AI 时按超时时间平滑增加估算进度，不固定停在一个百分比', async () => {
+        await renderStatus('analyzing', 180000);
         advance(150);
-        expect(estimatedProgress()).toBe('50');
+        expect(estimatedProgress()).toBe('71');
         expect(elapsed()).toBe('已用时：02:30');
         expect(container.textContent).not.toContain('100%');
         expect(vi.getTimerCount()).toBe(1);
+    });
+
+    it('优先显示服务端上报的真实阶段估算值', async () => {
+        await renderStatus('waiting', undefined, 47);
+        expect(estimatedProgress()).toBe('47');
+        expect(container.textContent).toContain('正在等待 AI 返回分析结果...');
     });
 
     it('切换阶段不重置用时，不在保存完成前显示 100%', async () => {
@@ -101,15 +107,15 @@ describe('按阶段估算进度并显示实际用时', () => {
         vi.setSystemTime(new Date('2026-10-19T04:01:00Z'));
         advance(1);
         expect(elapsed()).toBe('已用时：01:01');
-        expect(estimatedProgress()).toBe('50');
+        expect(estimatedProgress()).toBe('44');
     });
 
     it('长任务使用时分秒格式，英文界面也明确标注估算', async () => {
         localStorage.setItem('app-language', 'en');
         await renderStatus('analyzing');
         advance(3615);
-        expect(container.textContent).toContain('Waiting for AI analysis...');
-        expect(container.textContent).toContain('Stage estimate: 50%');
+        expect(container.textContent).toContain('AI is reading the question and generating the analysis...');
+        expect(container.textContent).toContain('Stage estimate: 80%');
         expect(elapsed()).toBe('Elapsed: 01:00:15');
     });
 });

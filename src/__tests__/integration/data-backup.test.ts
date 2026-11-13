@@ -53,6 +53,7 @@ async function importBackup(body: object) {
 
 /** 清空当前用户的学习数据（保留账户），模拟换机后导入 */
 async function clearUserData() {
+    await database.studentSubmission.deleteMany({ where: { userId: 'user-1' } });
     await database.examPaper.deleteMany({ where: { userId: 'user-1' } });
     await database.errorItem.deleteMany({ where: { userId: 'user-1' } });
     await database.subject.deleteMany({ where: { userId: 'user-1' } });
@@ -70,7 +71,7 @@ beforeAll(() => {
     process.env.CONFIG_DIR = join(directory, 'config');
     const url = `file:${join(directory, 'test.db')}`;
     execFileSync(process.execPath, [resolve('node_modules/prisma/build/index.js'), 'migrate', 'deploy'], {
-        env: { ...process.env, DATABASE_URL: url },
+        env: { ...process.env, DATABASE_URL: url, RUST_LOG: 'trace' },
         stdio: 'pipe',
     });
     database = new PrismaClient({ datasources: { db: { url } } });
@@ -178,12 +179,13 @@ describe('数据导出后再导入（真实 SQLite）', () => {
         await importBackup(backup);
         expect(hierarchy(await database.knowledgeTag.findMany({ where: scope }))).toEqual(hierarchy(before));
         expect(await database.knowledgeTag.count({ where: { name: '我的句式笔记' } })).toBe(1);
-    });
+    }, 120000);
 
-    it('导出文件使用第 3 版格式，包含 tagSet 字段', async () => {
+    it('导出文件使用第 6 版格式，包含 tagSet 和学生答题记录字段', async () => {
         const backup = await exportBackup();
-        expect(backup.version).toBe(4);
+        expect(backup.version).toBe(6);
         expect(backup.paperGroups).toContainEqual(expect.objectContaining({ id: 'group-b', key: 'b', name: 'B卷' }));
+        expect(backup.studentSubmissions).toEqual([]);
         expect(backup.systemTags).toBeDefined();
         expect(backup.subjects).toEqual(
             expect.arrayContaining([
@@ -203,6 +205,59 @@ describe('数据导出后再导入（真实 SQLite）', () => {
                 expect.objectContaining({ id: 'tag-2', tagSet: 'cn-math-taxonomy' }),
             ])
         );
+    });
+
+    it('学生答题记录及判分结果完整备份还原，并在重复导入时去重', async () => {
+        await database.user.create({ data: { id: 'admin-1', email: 'admin@example.com', password: 'test-only', role: 'admin' } });
+        await database.errorItem.create({
+            data: { id: 'shared-item', userId: 'admin-1', originalImageUrl: 'shared-image', questionText: '共享题', answerText: '共享答案' },
+        });
+        const submission = await database.studentSubmission.create({
+            data: {
+                id: 'student-submission-1', userId: 'user-1', kind: 'review', status: 'completed',
+                totalCount: 1, gradedCount: 1, correctCount: 0,
+                createdAt: new Date('2026-10-23T00:00:00Z'), completedAt: new Date('2026-10-23T00:01:00Z'),
+                answers: {
+                    create: {
+                        id: 'student-answer-1', errorItemId: 'shared-item', questionText: '共享题', answerText: '共享答案',
+                        analysis: '移项', originalImageUrl: 'image', figureSvg: figure, userAnswer: 'x = 7',
+                        status: 'graded', isCorrect: false, reason: '答案不正确', mistakeAnalysis: '符号错误',
+                        createdAt: new Date('2026-10-23T00:00:30Z'),
+                    },
+                },
+            },
+        });
+        const backup = await exportBackup();
+        expect(backup.studentSubmissions).toEqual([
+            expect.objectContaining({ id: submission.id, kind: 'review', status: 'completed', answers: [expect.objectContaining({ id: 'student-answer-1', status: 'graded' })] }),
+        ]);
+
+        await clearUserData();
+        const { stats } = await importBackup(backup);
+        expect(stats).toMatchObject({ studentSubmissionsCreated: 1, studentAnswersCreated: 1 });
+        expect(await database.studentSubmission.count({ where: { userId: 'user-1' } })).toBe(1);
+        expect(await database.studentSubmission.findFirstOrThrow()).toMatchObject({ id: submission.id, status: 'completed' });
+        expect(await database.studentAnswer.findFirstOrThrow()).toMatchObject({ errorItemId: 'shared-item', status: 'graded', isCorrect: false, userAnswer: 'x = 7' });
+        expect(await database.studentAnswer.findFirstOrThrow()).toMatchObject({ id: 'student-answer-1' });
+
+        await importBackup(backup);
+        expect(await database.studentSubmission.count({ where: { userId: 'user-1' } })).toBe(1);
+        expect(await database.studentAnswer.count()).toBe(1);
+    });
+
+    it('备份还原后保留仍在判分的题目状态以便恢复后台任务', async () => {
+        await database.studentSubmission.create({
+            data: {
+                id: 'grading-submission', userId: 'user-1', kind: 'review', status: 'grading', totalCount: 1,
+                answers: { create: { id: 'grading-answer', errorItemId: 'item-1', questionText: '题目', answerText: '答案', userAnswer: '作答', status: 'grading' } },
+            },
+        });
+        const backup = await exportBackup();
+        await clearUserData();
+        await importBackup(backup);
+
+        expect(await database.studentSubmission.findFirstOrThrow()).toMatchObject({ id: 'grading-submission', status: 'grading' });
+        expect(await database.studentAnswer.findFirstOrThrow()).toMatchObject({ id: 'grading-answer', status: 'grading' });
     });
 
     it('错题与举一反三记录的全部字段完整保留，tagSet 正确还原', async () => {

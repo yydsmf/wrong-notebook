@@ -28,7 +28,7 @@ const retry = (body?: unknown) => POST(
 describe('POST /api/exams/:id/retry', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mocks.getCurrentUser.mockResolvedValue({ id: 'user-1', role: 'user' });
+        mocks.getCurrentUser.mockResolvedValue({ id: 'user-1', role: 'admin' });
         mocks.findUnique.mockResolvedValue({ userId: 'user-1' });
         mocks.consumeAiQuota.mockResolvedValue(null);
     });

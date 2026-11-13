@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/current-user";
 import { badRequest, unauthorized } from "@/lib/api-errors";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { getCachedSpeech, getTtsMode, synthesizeSpeech } from "@/lib/tts/speech-cache";
 import type { SpeechResult } from "@/lib/tts/speech-cache";
 import { speechErrorResponse, speechLanguageSchema, speechTextsSchema } from "@/lib/tts/request";
@@ -52,8 +52,9 @@ async function handlePost(req: Request) {
         if (!regenerate && cached.every((item) => item)) {
             return NextResponse.json({ items: cached });
         }
-        const items = await trackBackgroundTask(
-            { userId: user.id, kind: 'tts_voice', total: texts.length, ...(await taskTarget(errorItemId, user.id)) },
+        const items = await trackBackgroundTaskForRequest(
+            req,
+            { userId: user.id, kind: 'tts_voice', total: texts.length, ...(await taskTarget(errorItemId, user.id)), retryRequest: { path: '/api/tts/batch', body: { texts, language, regenerate: true, errorItemId } } },
             async (task) => {
                 const results: SpeechResult[] = [];
                 for (const [index, text] of texts.entries()) {

@@ -1,6 +1,7 @@
 import { remark } from 'remark';
 import stripMarkdown from 'strip-markdown';
 import { frontendLogger } from "@/lib/frontend-logger";
+import { escapeAmbiguousMarkdown, extractMathSegments } from '@/lib/markdown-math';
 
 /**
  * Clean markdown content to plain text.
@@ -13,11 +14,16 @@ export function cleanMarkdown(content: string): string {
         // 1. First, handle custom LaTeX-like escape sequences that remark might not catch or handle as we want
         // Specifically, handle escaped underscores manually before markdown stripping
         // because we want "\_" to become "_" (plain text underscore), not removed entirely
-        let text = content.replace(/\\_/g, '_');
+        const { masked, segments } = extractMathSegments(content.replace(/\\_/g, '_'));
+        let text = escapeAmbiguousMarkdown(masked);
 
         // 2. Use remark to strip markdown formatting
         const file = remark().use(stripMarkdown).processSync(text);
         text = String(file);
+        text = text.replace(/@@MATH(\d+)@@/g, (_match, index: string) => {
+            const segment = segments[Number(index)];
+            return segment?.source ?? _match;
+        });
 
         // 3. Post-processing: specific cleanups for this app
         // Remove common LaTeX commands that might remain as plain text

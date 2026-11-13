@@ -5,7 +5,7 @@ import type { LatexFixInput } from "@/lib/ai";
 import { getCurrentUser } from "@/lib/current-user";
 import { unauthorized, notFound, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { countLatexIssues, findLatexIssuesByField, isAcceptableLatexFix, LATEX_FIELDS } from "@/lib/latex-check";
 import type { LatexField } from "@/lib/latex-check";
 import { consumeAiQuota } from "@/lib/ai-quota";
@@ -19,7 +19,7 @@ const logger = createLogger('api:error-items:fix-latex');
  * 修复后问题减少且内容长度变化不大时才保存，否则保留原文。
  */
 async function handlePost(
-    _req: Request,
+    req: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
     const { id } = await params;
@@ -55,8 +55,9 @@ async function handlePost(
         const limited = await consumeAiQuota(user, 'latex');
         if (limited) return limited;
 
-        const fixed = await trackBackgroundTask(
-            { userId: user.id, kind: 'fix_latex', subject: describeQuestion(item), link: `/error-items/${id}` },
+        const fixed = await trackBackgroundTaskForRequest(
+            req,
+            { userId: user.id, kind: 'fix_latex', subject: describeQuestion(item), link: `/error-items/${id}`, retryRequest: { path: `/api/error-items/${id}/fix-latex`, body: {} } },
             () => getAIService().fixLatex(input)
         );
         const updated: Partial<Record<LatexField, string>> = {};

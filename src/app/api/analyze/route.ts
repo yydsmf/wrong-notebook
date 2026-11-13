@@ -10,16 +10,20 @@ import type { CandidateTags, GradeLevel } from "@/lib/ai/types";
 import { getNotebookCandidateTags } from "@/lib/ai/tag-service";
 import { resolveNotebookScope, SUBJECT_DISPLAY_NAMES } from "@/lib/notebook-scope";
 import { createLogger } from "@/lib/logger";
-import { trackBackgroundTask } from "@/lib/background-tasks";
+import { isBackgroundTaskReplay, trackBackgroundTask } from "@/lib/background-tasks";
 import { getAppTimeZone } from "@/lib/config";
 import { getErrorMessage } from "@/lib/error-message";
 import { consumeAiQuota } from "@/lib/ai-quota";
-import { withRecoverableResponse } from "@/lib/recoverable-response";
+import { updateStoredResponseProgressFromRequest, withRecoverableResponse } from "@/lib/recoverable-response";
+import type { RequestProgress } from "@/lib/request-progress";
 
 const logger = createLogger('api:analyze');
 
 async function handlePost(req: Request) {
     logger.info('Analyze API called');
+
+    const updateProgress = (progress: RequestProgress) => updateStoredResponseProgressFromRequest(req, progress);
+    updateProgress({ stage: 'requesting', percent: 15 });
 
     const session = await getServerSession(authOptions);
 
@@ -106,11 +110,30 @@ async function handlePost(req: Request) {
         const limited = await consumeAiQuota(session.user, 'analyze');
         if (limited) return limited;
 
-        const aiService = getAIService();
-        const analysisResult = await trackBackgroundTask(
-            { userId: session.user.id, kind: 'analyze', subject: notebookName },
-            () => aiService.analyzeImage(imageBase64, mimeType, language, userGrade, subjectChinese, userGradeSemester, candidateTags)
+        updateProgress({ stage: 'thinking', percent: 25 });
+        const aiService = getAIService({ onProgress: updateProgress });
+        const analyze = () => aiService.analyzeImage(imageBase64, mimeType, language, userGrade, subjectChinese, userGradeSemester, candidateTags);
+        const defaultReturnPath = subjectId ? `/notebooks/${encodeURIComponent(subjectId)}/add` : '/';
+        const returnPath = typeof body.returnPath === 'string' && body.returnPath.startsWith('/') && !body.returnPath.startsWith('//') && !body.returnPath.includes('\\')
+            && new URL(body.returnPath, 'http://localhost').origin === 'http://localhost'
+            ? body.returnPath
+            : defaultReturnPath;
+        const retryReplay = isBackgroundTaskReplay(req);
+        const analysisResult = retryReplay ? await analyze() : await trackBackgroundTask(
+            {
+                userId: session.user.id,
+                kind: 'analyze',
+                subject: notebookName,
+                link: returnPath,
+                retryRequest: {
+                    path: '/api/analyze',
+                    body: { imageBase64, mimeType, language, subjectId: subjectId || undefined, confirmBeforeImport: body.confirmBeforeImport === true, returnPath },
+                    timeoutMs: 180000,
+                },
+            },
+            analyze
         );
+        updateProgress({ stage: 'collecting', percent: 86 });
 
         logger.debug({
             knowledgePointsCount: analysisResult.knowledgePoints?.length,
@@ -124,6 +147,8 @@ async function handlePost(req: Request) {
         }
 
         logger.info('AI analysis successful');
+        // AI 分析已经完成，但浏览器还需要整理并保存结果；最终完成状态由前端导入流程确认。
+        updateProgress({ stage: 'collecting', percent: 90 });
 
         return NextResponse.json(gradeProfile ? {
             ...analysisResult,

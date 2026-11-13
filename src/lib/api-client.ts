@@ -1,5 +1,6 @@
 import { toast } from "@/lib/feedback";
 import { translations } from "@/lib/translations";
+import type { RequestProgress } from "@/lib/request-progress";
 
 type RequestOptions = RequestInit & {
     params?: Record<string, string>;
@@ -9,6 +10,8 @@ type RequestOptions = RequestInit & {
      * 改为轮询 /api/requests/:id 取回服务端的响应，对应路由需用 withRecoverableResponse 包装
      */
     recoverable?: boolean;
+    /** 轮询服务端阶段；只传状态，不把 AI 原始流展示给浏览器 */
+    onProgress?: (progress: RequestProgress) => void;
 };
 
 export class ApiError extends Error {
@@ -56,10 +59,14 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * 请求被中断后轮询服务端暂存的响应，直到请求结束或超过原定的超时时间；
  * 查不到请求时抛出原来的网络错误
  */
-async function recoverResponse<T>(requestId: string, deadline: number, originalError: unknown): Promise<T> {
+type StoredRequestStatus =
+    | { state: 'running'; progress?: RequestProgress }
+    | { state: 'done'; status: number; body: unknown };
+
+async function recoverResponse<T>(requestId: string, deadline: number, originalError: unknown, onProgress?: (progress: RequestProgress) => void): Promise<T> {
     const lostAt = Date.now();
     while (Date.now() < deadline) {
-        let stored: { state: 'running' } | { state: 'done'; status: number; body: unknown } | null = null;
+        let stored: StoredRequestStatus | null = null;
         try {
             stored = await request(`/api/requests/${requestId}`, { method: 'GET', timeout: 15000 });
         } catch (error) {
@@ -73,15 +80,33 @@ async function recoverResponse<T>(requestId: string, deadline: number, originalE
             if (stored.status === 429) notifyAiDailyLimit(stored.body);
             throw new ApiError(stored.status, '', stored.body);
         }
+        if (stored?.state === 'running' && stored.progress) onProgress?.(stored.progress);
         await sleep(RECOVERY_POLL_MS);
     }
     throw new ApiError(408, 'Request Timeout', { message: 'AI_TIMEOUT_ERROR' });
 }
 
 async function request<T>(url: string, options: RequestOptions = {}): Promise<T> {
-    const { params, headers, timeout = 60000, recoverable, ...rest } = options;
+    const { params, headers, timeout = 60000, recoverable, onProgress, ...rest } = options;
     const requestId = recoverable ? createRequestId() : null;
     const startedAt = Date.now();
+    let progressPolling = true;
+
+    if (requestId && onProgress) {
+        onProgress({ stage: 'requesting', percent: 10 });
+        void (async () => {
+            while (progressPolling && Date.now() < startedAt + timeout) {
+                try {
+                    const stored = await request<StoredRequestStatus>(`/api/requests/${requestId}`, { method: 'GET', timeout: 5000 });
+                    if (stored.state === 'done') return;
+                    if (stored.progress) onProgress(stored.progress);
+                } catch {
+                    // 请求尚未登记、网络短暂抖动或服务端尚未响应时继续轮询。
+                }
+                await sleep(1000);
+            }
+        })();
+    }
 
     let finalUrl = url;
     if (params) {
@@ -142,9 +167,11 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
             });
         }
         if (requestId && isNetworkError(error)) {
-            return recoverResponse<T>(requestId, startedAt + timeout, error);
+            return recoverResponse<T>(requestId, startedAt + timeout, error, onProgress);
         }
         throw error;
+    } finally {
+        progressPolling = false;
     }
 }
 

@@ -12,6 +12,44 @@ const DOUBLE_ESCAPED_COMMAND = /(?<!\\)\\\\(?=(?:frac|dfrac|tfrac|sqrt|times|div
 
 const PLACEHOLDER = (index: number) => `@@MATH${index}@@`;
 const PLACEHOLDER_PATTERN = /@@MATH(\d+)@@/g;
+const CODE_SEGMENT = /(`{3,}|~{3,})[\s\S]*?\1|(`+)[^`\n]*?\2/g;
+const STRONG_UNDERSCORE_SEGMENT = /__(?=[\p{L}\p{N}])[\p{L}\p{N}\s]+__/gu;
+
+/**
+ * Protect common literal symbols from being interpreted as Markdown syntax.
+ * Code spans/fences are left untouched; math segments are masked by callers.
+ */
+export function escapeAmbiguousMarkdown(text: string): string {
+    const protectedSegments: string[] = [];
+    let prefix = 'WNMARKDOWNCODE';
+    while (text.includes(prefix)) prefix += 'X';
+
+    const masked = text.replace(CODE_SEGMENT, (code) => {
+        const index = protectedSegments.push(code) - 1;
+        return `${prefix}${index}TOKEN`;
+    });
+
+    // Keep explicit __word__ emphasis, but treat __, __ and similar question blanks literally.
+    const maskedStrong = masked.replace(STRONG_UNDERSCORE_SEGMENT, (strong) => {
+        const index = protectedSegments.push(strong) - 1;
+        return `${prefix}${index}TOKEN`;
+    });
+
+    const operand = '(?:@@MATH\\d+@@|[\\p{L}]|\\d+(?:\\.\\d+)?)';
+    const arithmeticExpression = new RegExp(
+        `(?<![\\p{L}\\d])${operand}(?:\\s*[*/×÷+\\-]\\s*${operand})+(?![\\p{L}\\d])`,
+        'gu',
+    );
+
+    return maskedStrong
+        // Two or more underscores in question text are commonly fill-in blanks, not emphasis.
+        .replace(/_{2,}/g, (run) => [...run].map((char) => `\\${char}`).join(''))
+        // Asterisk chains between math-like operands are multiplication, not emphasis.
+        .replace(arithmeticExpression, (expression) => expression.replace(/(?<!\\)\*/g, '\\*'))
+        // At line start, >5 / >x is a comparison rather than a blockquote.
+        .replace(/(^|\n)([ \t]*)>(?=[A-Za-z0-9$(])/g, '$1$2\\>')
+        .replace(new RegExp(`${prefix}(\\d+)TOKEN`, 'g'), (_match, index: string) => protectedSegments[Number(index)]);
+}
 
 // 选择题选项标记：支持行首、空白或句读/括号后的 A. / B．/ C: / D：、(A) / （B），以及行首或双空格/括号后的 A、
 const CHOICE_OPTION_GLOBAL = /(?:(?:^|[\s*+\-)）:：。？?；;，,_])([A-D])\s*[.．:：]|(?:^|\s{2,}|[)）:：。？?])([A-D])\s*、|[(（]([A-D])[)）])/gm;
@@ -65,7 +103,7 @@ function normalizeMathSegment(segment: string): string {
 }
 
 /** 公式以外文字的整理：字面 "\n" 转为换行，选择题选项与题干分行，句末换行转为分段 */
-function normalizeText(text: string): string {
+export function normalizeQuestionText(text: string): string {
     const withNewlines = text.replace(/\\n/g, '\n');
     return separateChoiceOptions(withNewlines, '\n\n')
         // 保留已有的空行
@@ -108,5 +146,6 @@ export function extractMathSegments(content: string | null | undefined): { maske
  */
 export function prepareMarkdownMath(content: string | null | undefined): string {
     const { masked, segments } = extractMathSegments(content);
-    return normalizeText(masked).replace(PLACEHOLDER_PATTERN, (_match, index: string) => segments[Number(index)].source);
+    return escapeAmbiguousMarkdown(normalizeQuestionText(masked))
+        .replace(PLACEHOLDER_PATTERN, (_match, index: string) => segments[Number(index)].source);
 }

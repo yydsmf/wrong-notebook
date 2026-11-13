@@ -29,6 +29,7 @@ async function handlePost(
         if (!user) {
             return unauthorized("Authentication required");
         }
+        if (user.role !== 'admin') return notFound("Exam question not found");
 
         const parsed = regenerateSchema.safeParse(await req.json().catch(() => ({})));
         if (!parsed.success) {
@@ -38,7 +39,7 @@ async function handlePost(
         const limited = await consumeAiQuota(user, 'exam');
         if (limited) return limited;
 
-        const updated = await regenerateExamQuestion(id, questionId, user.id, parsed.data.mode, parsed.data.language || 'zh');
+        const updated = await regenerateExamQuestion(id, questionId, user.id, parsed.data.mode, req, parsed.data.language || 'zh');
         return NextResponse.json(updated);
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

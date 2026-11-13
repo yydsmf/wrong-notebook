@@ -15,9 +15,9 @@ describe('buildQuestionSummary', () => {
         expect(buildQuestionSummary(null, 80)).toEqual([]);
     });
 
-    it('拆分文字与公式，并去掉 Markdown 格式', () => {
+    it('拆分题干原文与公式，不解析普通文字中的 Markdown 符号', () => {
         expect(buildQuestionSummary('**已知** $\\frac{\\sqrt{3}}{2}$，求 $\\sin\\alpha$ 的值', 80)).toEqual([
-            { type: 'text', value: '已知 ' },
+            { type: 'text', value: '**已知** ' },
             { type: 'math', tex: '\\frac{\\sqrt{3}}{2}' },
             { type: 'text', value: '，求 ' },
             { type: 'math', tex: '\\sin\\alpha' },
@@ -68,6 +68,18 @@ describe('QuestionSummary', () => {
         expect(visible).not.toContain('\\');
     });
 
+    it('题干摘要中连续填空线全部按字面可见', () => {
+        const { visible } = renderSummary('诗句："____"；志士"____"；陆游"____"。');
+        expect((visible.match(/____/g) || [])).toHaveLength(3);
+    });
+
+    it('题干摘要中被标点分隔的下划线按原文可见', () => {
+        const { visible } = renderSummary('古往今来写下诗篇："__，__"；"__,__"；"__、__"。');
+        expect(visible).toContain('"__，__"');
+        expect(visible).toContain('"__,__"');
+        expect(visible).toContain('"__、__"');
+    });
+
     it('恶意标签及嵌套标签仍作为文本处理，不创建可执行元素', () => {
         for (const text of ['题干 <script>globalThis.injected = true</script>',
             '题干 <img src=x onerror=alert(1)>', '题干 <scr<script>ipt>alert(1)</scr<script>ipt>']) {
@@ -85,10 +97,10 @@ describe('QuestionSummary', () => {
         expect(visible).not.toContain('$');
     });
 
-    it('未闭合的 $ 或缺少定界符的 LaTeX 片段按纯文本清理，不残留反斜杠和 $', () => {
+    it('未闭合或缺少定界符的公式按题干原文保留', () => {
         for (const text of ['已知 $x \\leq 3', '已知 \\frac{1}{2} \\times 4']) {
             const { visible } = renderSummary(text);
-            expect(visible).not.toMatch(/[\\$]/);
+            expect(visible).toContain(text);
         }
     });
 });

@@ -18,13 +18,14 @@ let directory: string;
 let databasePath: string;
 let schemaPath: string;
 let database: DatabaseSync | undefined;
+type DatabaseRow = Record<string, unknown>;
 
 function deploy(names = migrations) {
     for (const name of names) {
         cpSync(join(source, 'migrations', name), join(directory, 'migrations', name), { recursive: true });
     }
     return execFileSync(process.execPath, [resolve('node_modules/prisma/build/index.js'), 'migrate', 'deploy', '--schema', schemaPath], {
-        env: { ...process.env, DATABASE_URL: 'file:' + databasePath },
+        env: { ...process.env, DATABASE_URL: 'file:' + databasePath, RUST_LOG: 'trace' },
         encoding: 'utf8', stdio: 'pipe', timeout: 120000,
     });
 }
@@ -40,8 +41,8 @@ function closeDatabase() {
     database = undefined;
 }
 
-function rows(table: string) {
-    return database!.prepare('SELECT * FROM "' + table + '" ORDER BY rowid').all();
+function rows(table: string): DatabaseRow[] {
+    return database!.prepare('SELECT * FROM "' + table + '" ORDER BY rowid').all() as DatabaseRow[];
 }
 
 function seedLegacyData() {
@@ -115,10 +116,30 @@ describe('真实 Prisma 数据库迁移', () => {
                 expect.objectContaining({ name: 'figureAlign', dflt_value: "'center'" }),
                 expect.objectContaining({ name: 'answerSpacePx', notnull: 0, dflt_value: null }),
             ]));
+        expect(database!.prepare('PRAGMA table_info("StudentSubmission")').all())
+            .toEqual(expect.arrayContaining([
+                expect.objectContaining({ name: 'userId', notnull: 1 }),
+                expect.objectContaining({ name: 'status', dflt_value: "'grading'" }),
+                expect.objectContaining({ name: 'totalCount', notnull: 1 }),
+            ]));
+        expect(database!.prepare('PRAGMA table_info("StudentAnswer")').all())
+            .toEqual(expect.arrayContaining([
+                expect.objectContaining({ name: 'submissionId', notnull: 1 }),
+                expect.objectContaining({ name: 'answerText', notnull: 1 }),
+                expect.objectContaining({ name: 'status', dflt_value: "'pending'" }),
+            ]));
+        expect(database!.prepare('PRAGMA foreign_key_list("StudentAnswer")').all())
+            .toEqual(expect.arrayContaining([
+                expect.objectContaining({ table: 'StudentSubmission', from: 'submissionId', on_delete: 'CASCADE' }),
+                expect.objectContaining({ table: 'ErrorItem', from: 'errorItemId', on_delete: 'SET NULL' }),
+                expect.objectContaining({ table: 'ExamQuestion', from: 'examQuestionId', on_delete: 'SET NULL' }),
+            ]));
         closeDatabase();
 
         expect(() => execFileSync(process.execPath, [resolve('node_modules/prisma/build/index.js'), 'migrate', 'diff',
-            '--from-url', 'file:' + databasePath, '--to-schema-datamodel', schemaPath, '--exit-code'], { stdio: 'pipe' })).not.toThrow();
+            '--from-url', 'file:' + databasePath, '--to-schema-datamodel', schemaPath, '--exit-code'], {
+            env: { ...process.env, RUST_LOG: 'trace' }, stdio: 'pipe',
+        })).not.toThrow();
         expect(deploy()).toContain('No pending migrations');
     }, 120000);
 
@@ -128,7 +149,7 @@ describe('真实 Prisma 数据库迁移', () => {
         openDatabase();
         seedLegacyData();
         if (hasScale) database!.exec('UPDATE "ErrorItem" SET figureScale=65');
-        const beforeItems = rows('ErrorItem');
+        const beforeItems: DatabaseRow[] = rows('ErrorItem').map((item) => ({ ...item, figureDescription: null, imageFragments: null }));
         const beforeRelated = relatedTables.map((table) => rows(table).map((row) => {
             if (table === 'Subject' || table === 'KnowledgeTag') return { ...row, tagSet: row.tagSet ?? 'default' };
             if (table === 'ExamQuestion') return { ...row, figureScale: row.figureScale ?? 100, figureAlign: row.figureAlign ?? 'center', answerSpacePx: null };
@@ -139,11 +160,11 @@ describe('真实 Prisma 数据库迁移', () => {
         deploy();
         openDatabase();
         expectConstraints();
-        const groups = rows('PaperGroup');
+        const groups: DatabaseRow[] = rows('PaperGroup');
         expect(groups).toHaveLength(4);
         for (const item of beforeItems) {
-            const group = groups.find((entry) => entry.userId === item.userId && entry.key === item.paperLevel);
-            expect(rows('ErrorItem').find((entry) => entry.id === item.id)).toEqual({
+            const group = groups.find((entry: DatabaseRow) => entry.userId === item.userId && entry.key === item.paperLevel);
+            expect(rows('ErrorItem').find((entry: DatabaseRow) => entry.id === item.id)).toEqual({
                 ...item, paperLevel: group?.id ?? null, figureScale: hasScale ? 65 : 100, figureAlign: 'center', answerSpacePx: null,
             });
         }
@@ -152,8 +173,8 @@ describe('真实 Prisma 数据库迁移', () => {
             .toThrow(/FOREIGN KEY/);
         expect(() => database!.exec('UPDATE "ErrorItem" SET shortId=\'ShortA\' WHERE id=\'item-b\''))
             .toThrow(/UNIQUE/);
-        const group = groups.find((entry) => entry.userId === 'user-1' && entry.key === 'a')!;
-        database!.prepare('DELETE FROM "PaperGroup" WHERE id=?').run(group.id);
+        const group = groups.find((entry: DatabaseRow) => entry.userId === 'user-1' && entry.key === 'a')!;
+        database!.prepare('DELETE FROM "PaperGroup" WHERE id=?').run(group.id as string);
         expect(database!.prepare('SELECT paperLevel FROM "ErrorItem" WHERE id=\'item-a\'').get()).toEqual({ paperLevel: null });
         expect(relatedTables.map(rows)).toEqual(beforeRelated);
     }, 120000);
@@ -168,7 +189,7 @@ describe('真实 Prisma 数据库迁移', () => {
             INSERT INTO "ErrorItem" (id, userId, originalImageUrl, paperLevel, figureScale, updatedAt)
                 VALUES ('existing-item', 'existing-user', 'original', 'custom-group', 175, '2026-10-01');
         `);
-        const beforeItems = rows('ErrorItem').map((item) => ({ ...item, figureAlign: 'center', answerSpacePx: null }));
+        const beforeItems = rows('ErrorItem').map((item) => ({ ...(item as Record<string, unknown>), figureDescription: null, imageFragments: null, figureAlign: 'center', answerSpacePx: null }));
         const beforeGroups = rows('PaperGroup');
         closeDatabase();
 

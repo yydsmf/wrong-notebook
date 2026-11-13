@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     errorItem: { findMany: vi.fn() },
-    session: { user: { id: 'user-1', email: 'user@example.com' }, expires: '2099-01-01' } as { user: { id: string; email: string }; expires: string } | null,
+    studentAnswer: { findMany: vi.fn() },
+    user: { findMany: vi.fn(), findUnique: vi.fn(async () => ({ masteryThreshold: 50 })) },
+    session: { user: { id: 'user-1', email: 'user@example.com', role: 'admin' }, expires: '2099-01-01' } as { user: { id: string; email: string; role: string }; expires: string } | null,
 }));
 
-vi.mock('@/lib/prisma', () => ({ prisma: { errorItem: mocks.errorItem, user: { findUnique: vi.fn(async () => ({ masteryThreshold: 50 })) } } }));
+vi.mock('@/lib/prisma', () => ({ prisma: { errorItem: mocks.errorItem, studentAnswer: mocks.studentAnswer, user: mocks.user } }));
 vi.mock('next-auth', () => ({ getServerSession: vi.fn(() => Promise.resolve(mocks.session)) }));
 vi.mock('@/lib/auth', () => ({ authOptions: {} }));
 vi.mock('@/lib/config', () => ({ getAppTimeZone: () => 'Asia/Shanghai' }));
@@ -32,7 +34,8 @@ describe('GET /api/review/due', () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         // 北京时间 2026-10-20 12:00
         vi.setSystemTime(new Date('2026-10-20T04:00:00Z'));
-        mocks.session = { user: { id: 'user-1', email: 'user@example.com' }, expires: '2099-01-01' };
+        mocks.session = { user: { id: 'user-1', email: 'user@example.com', role: 'admin' }, expires: '2099-01-01' };
+        mocks.user.findMany.mockResolvedValue([]);
         mocks.errorItem.findMany.mockImplementation(async (args: { where: { id?: { in: string[] } } }) => {
             if (!args.where.id) return candidates;
             return args.where.id.in.map((id) => ({ id, masteryProbability: null, subject: null, tags: [], _count: { practiceRecords: id === 'new' ? 0 : 1 } }));
@@ -68,5 +71,23 @@ describe('GET /api/review/due', () => {
         mocks.session = null;
         const response = await get();
         expect(response.status).toBe(401);
+    });
+
+    it('学生只使用自己的已判分记录计算共享题库复习计划', async () => {
+        mocks.session = { user: { id: 'student-1', email: 'student@example.com', role: 'user' }, expires: '2099-01-01' };
+        mocks.user.findMany.mockResolvedValue([{ id: 'admin-1' }]);
+        mocks.studentAnswer.findMany.mockResolvedValue([
+            { errorItemId: 'old', isCorrect: true, createdAt: new Date('2026-10-19T02:00:00Z') },
+        ]);
+
+        const response = await get();
+        expect(response.status).toBe(200);
+        expect(mocks.studentAnswer.findMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: expect.objectContaining({
+                status: 'graded',
+                submission: { userId: 'student-1' },
+            }),
+        }));
+        expect((await response.json()).items.map((item: { id: string }) => item.id)).toContain('old');
     });
 });

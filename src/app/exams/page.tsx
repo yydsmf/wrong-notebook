@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useTimeZone } from "@/contexts/TimeZoneContext";
 import { formatDateTime } from "@/lib/date-time";
@@ -20,6 +21,9 @@ import type { ExamPaperSummary } from "@/types/api";
 export default function ExamsPage() {
     const { timeZone } = useTimeZone();
     const { t } = useLanguage();
+    const { data: session } = useSession();
+    const isStudent = session?.user?.role === "user";
+    const isAdmin = session?.user?.role === "admin";
     usePageTitle(t.exam.title);
     const [papers, setPapers] = useState<ExamPaperSummary[] | null>(null);
     const [showForm, setShowForm] = useState(false);
@@ -40,7 +44,7 @@ export default function ExamsPage() {
             <div className="space-y-6">
                 <PageHeader
                     title={t.exam.title}
-                    description={t.exam.subtitle}
+                    description={isStudent ? undefined : isAdmin ? t.exam.subtitle : undefined}
                     actions={!showForm && (
                         <Button onClick={() => setShowForm(true)} aria-label={t.exam.create}>
                             <Plus className="h-4 w-4" />
@@ -49,7 +53,7 @@ export default function ExamsPage() {
                     )}
                 />
 
-                {showForm && <ExamCreateForm />}
+                {showForm && session?.user?.role && <ExamCreateForm isStudent={isStudent} />}
 
                 <section className="space-y-3">
                     <h2 className="text-lg font-semibold">{t.exam.list}</h2>
@@ -73,8 +77,8 @@ export default function ExamsPage() {
                                             <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                                                 <span>{formatDateTime(paper.createdAt, "yyyy-MM-dd HH:mm", timeZone)}</span>
                                                 <span>{t.exam.questionCount.replace("{count}", String(paper.questionCount))}</span>
-                                                <span>{t.exam.scopes[paper.scope]}</span>
-                                                <span>{difficultyLabels[paper.difficulty] || paper.difficulty}</span>
+                                                {isAdmin && <span>{t.exam.scopes[paper.scope]}</span>}
+                                                {isAdmin && <span>{difficultyLabels[paper.difficulty] || paper.difficulty}</span>}
                                                 <span>{paper.recordedCount > 0 ? t.exam.recorded : t.exam.notRecorded}</span>
                                             </div>
                                         </CardContent>

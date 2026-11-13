@@ -1,8 +1,6 @@
 /**
- * 错题卡片的题干摘要：去掉 Markdown 格式，但保留公式源码，交给 KaTeX 渲染，
- * 避免复杂 LaTeX（嵌套分数、向量、三角函数等）被正则转成难以阅读的残留文本。
+ * 错题卡片的题干摘要：原文按纯文本保留，只有显式定界的数学公式交给 KaTeX 渲染。
  */
-import { cleanMarkdown } from './markdown-utils';
 import { extractMathSegments } from './markdown-math';
 
 /** 摘要片段：普通文字或行内公式 */
@@ -24,8 +22,7 @@ export function buildQuestionSummary(questionText: string | null | undefined, ma
     const { masked, segments } = extractMathSegments(questionText);
     // 先抽出公式再分段，避免 $$…$$ 块内的空行把公式拆开
     const firstParagraph = masked.trim().split(/\n\s*\n/)[0] ?? '';
-    const cleaned = cleanMarkdown(firstParagraph);
-    const pieces = cleaned.split(PLACEHOLDER_SPLIT);
+    const pieces = firstParagraph.split(PLACEHOLDER_SPLIT);
 
     const parts: SummaryPart[] = [];
     let used = 0;

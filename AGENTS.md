@@ -92,22 +92,27 @@ bash scripts/ci.sh          # 完整 CI（要求 Node.js 22 及以上，含生�
 - `src/__tests__/integration/data-backup.test.ts` — 数据备份测试，验证导出后导入能完整还原
 
 **导入导出格式约定：**
-- 导出文件 `version` 字段：新增字段时版本号 +1（当前 version 4）
+- 导出文件 `version` 字段：新增字段时版本号 +1（当前 version 6）
 - 旧版导出文件没有的新字段，导入时必须有默认值或跳过逻辑
 - 多标签体系数据（`tagSet`）需按体系分组导出和导入，避免混淆
 
 ## Git 与提交
 
+- 本仓库为 `yydsmf/wrong-notebook`，公开主分支为 `main`。`origin` 必须是 `https://github.com/yydsmf/wrong-notebook.git`；`upstream` 为 `https://github.com/margrop/wrong-notebook.git`，仅用于获取上游更新。所有发布只推送 `origin`，不得推送 `upstream`。
+- 正式工作目录和禁止使用的本地副本记录在 `.git/info/RELEASE_LOCAL.md`（若存在）。该说明仅本地使用，不提交真实本机路径或部署凭据。
 - `main` 为公开主线，禁止反向合并私有部署分支。向 GitHub 推送前运行 `python3 scripts/check-public-history.py <待推送引用>`；每个工作副本用 `git config core.hooksPath .githooks` 启用上传前检查。
 - 分支边界、检查和公开发布流程见 `doc/BRANCH_WORKFLOW.md`。
+- 首次发布前先确认是否保留源项目完整历史。需要保留时，先从 `upstream` 获取完整历史，再安全整合当前本地改动；不得在未保护工作区的情况下直接拉取合并。空 `origin` 不执行 `git pull origin main`，首次推送后再将本地 `main` 的跟踪分支设为 `origin/main`。
 
-- 向 GitHub 推送前展示 `git status` 与拟推送的 `git diff`，经用户确认后再执行 `git push`（包括分支、标签和历史重写）。本地 `git add` / `git commit` 及推送 Gitea 无需单独确认。
+- 向 GitHub 推送前展示 `git status` 与拟推送的 `git diff`；用户尚未授权推送时，取得授权后再执行 `git push`。本地 `git add` / `git commit` 无需单独确认。
 - 用户在需求中已明确要求提交、推送或发布时，视为已确认，直接执行，不再二次确认；正式版标签仍需用户明确要求创建。
-- 发布版本默认打预览版标签 `v年.月.日-n`（如 `v2026.10.22-1`，`n` 为当天序号，月日不补零），推送前确认对应提交的 GitHub CI（含 E2E）已通过；正式版标签 `v年.月.日` 必须由用户确认后才能创建和推送。详见 `doc/release-guide.md`。
+- 用户说“最近有改动，推送新版本”时，按 `doc/release-guide.md` 完成状态与远端检查、上次标签以来的改动审阅、测试构建、暂存区及公开历史检查，然后创建发布提交与下一个预览标签，执行 `git push origin main <tag>`，核对远端引用及 GitHub Actions 实际状态。
+- 发布版本默认打预览版标签 `v年.月.日-n`（如 `v2026.11.13-1`，`n` 为当天序号，月日不补零）；不修改 `package.json` 的版本号。正式版标签 `v年.月.日` 必须由用户明确授权，并在更新 `CHANGELOG.md`、确认 CI、E2E 和构建全部成功后才能创建和推送。Actions 仍在排队或执行时不得声称构建已成功。
+- 公开提交禁止包含真实 API Key、密码、Token、私钥、部署凭据、`.env` 或 `config/setup-token`。不得无筛选执行 `git add .`；至少审阅最终暂存区，并在发布前执行 `git diff --check`。不得使用 `git push --force`、`git reset --hard` 或 `git clean -fd`，不得删除用户已有的未跟踪文件。
 - 提交信息格式：`<type>: <中文描述>`，type 取 feat / fix / docs / style / refactor / test / chore / ci。
 - 提交信息中不添加 AI 署名。
 - 按功能拆分提交：一次任务包含多个相互独立的需求时，每个需求单独提交；同一需求涉及多个可独立交付的部分（如接入多个提供商）时也逐个提交。每个提交都应能独立通过测试，并包含该功能对应的测试与文档改动；无关的格式化、重构不要混入功能提交。
-- `main` 为公开主线；公开远程名称为 `github`。私有部署分支仅推送到受限远程，禁止将其提交或合并记录带入公开历史。
+- `main` 为公开主线；公开远程名称为 `origin`。私有部署分支仅推送到受限远程，禁止将其提交或合并记录带入公开历史。
 
 ## 文档同步
 

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
-import { unauthorized, badRequest, conflict, internalError } from "@/lib/api-errors";
+import { unauthorized, forbidden, badRequest, conflict, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 import { isValidNotebookScope, stageFromEducationStage, STAGE_SUBJECTS, type NotebookSubject } from "@/lib/notebook-scope";
 
@@ -25,6 +25,15 @@ export async function GET() {
 
         if (!user) {
             return unauthorized("Authentication required");
+        }
+
+        if (user.role !== 'admin') {
+            const admins = await prisma.subject.findMany({
+                where: { user: { role: 'admin', isActive: true } },
+                select: { id: true, name: true, stage: true, subjectKey: true, tagSet: true, userId: true, createdAt: true, updatedAt: true, _count: { select: { errorItems: true } } },
+                orderBy: { createdAt: 'asc' },
+            });
+            return NextResponse.json(admins);
         }
 
         let notebooks = await prisma.subject.findMany({
@@ -106,6 +115,7 @@ export async function POST(req: Request) {
         if (!user) {
             return unauthorized("Authentication required");
         }
+        if (user.role !== 'admin') return forbidden("Admin role required");
 
         const body = await req.json();
         const { name, stage, subjectKey, tagSet } = body;

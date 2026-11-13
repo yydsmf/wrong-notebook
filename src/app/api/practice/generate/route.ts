@@ -5,7 +5,7 @@ import { getServerSession } from "next-auth";
 import { getAIService } from "@/lib/ai";
 import { notFound, internalError, unauthorized } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { parseLastPractice, serializeLastPractice } from "@/lib/last-practice";
 import type { LastPractice } from "@/lib/last-practice";
 import { consumeAiQuota } from "@/lib/ai-quota";
@@ -78,8 +78,9 @@ async function handlePost(req: Request) {
         if (limited) return limited;
 
         const aiService = getAIService();
-        const similarQuestion = await trackBackgroundTask(
-            { userId: session.user.id, kind: 'practice', subject: describeQuestion(errorItemWithSubject), link: `/error-items/${errorItemId}` },
+        const similarQuestion = await trackBackgroundTaskForRequest(
+            req,
+            { userId: session.user.id, kind: 'practice', subject: describeQuestion(errorItemWithSubject), link: `/error-items/${errorItemId}`, retryRequest: { path: '/api/practice/generate', body: { errorItemId, language, difficulty: difficulty || 'medium' } } },
             () => aiService.generateSimilarQuestion(
                 errorItemWithSubject.questionText || "",
                 tags,

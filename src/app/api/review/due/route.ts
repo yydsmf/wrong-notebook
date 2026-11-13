@@ -8,7 +8,8 @@ import { createLogger } from "@/lib/logger";
 import { getMasteryThreshold } from "@/lib/mastery";
 import { PRACTICE_RECORD_COUNT, masteryStatusOf } from "@/lib/mastery-status";
 import { prisma } from "@/lib/prisma";
-import { getReviewPlan, isReviewDue } from "@/lib/review-schedule";
+import { getReviewPlan, getStudentReviewPlan, isReviewDue } from "@/lib/review-schedule";
+import { getStudentAnswerOptions } from "@/lib/student-answers";
 
 const logger = createLogger('api:review:due');
 
@@ -27,6 +28,67 @@ export async function GET(req: Request) {
     try {
         const timeZone = getAppTimeZone();
         const now = new Date();
+        if (session.user.role === "user") {
+            const admins = await prisma.user.findMany({ where: { role: "admin", isActive: true }, select: { id: true } });
+            const adminIds = admins.map((admin) => admin.id);
+            const candidates = await prisma.errorItem.findMany({
+                where: {
+                    userId: { in: adminIds },
+                    questionText: { not: null },
+                    answerText: { not: null },
+                    ...(subjectId ? { subjectId } : {}),
+                },
+                select: { id: true, createdAt: true },
+            });
+            const history = candidates.length > 0 ? await prisma.studentAnswer.findMany({
+                where: {
+                    errorItemId: { in: candidates.map((item) => item.id) },
+                    status: "graded",
+                    submission: { userId: session.user.id },
+                },
+                select: { errorItemId: true, isCorrect: true, createdAt: true },
+                orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            }) : [];
+            const historyByItem = new Map<string, { result: string; createdAt: Date }[]>();
+            for (const record of history) {
+                if (!record.errorItemId) continue;
+                const records = historyByItem.get(record.errorItemId) ?? [];
+                records.push({ result: record.isCorrect ? "correct" : "wrong", createdAt: record.createdAt });
+                historyByItem.set(record.errorItemId, records);
+            }
+            const due = candidates.map((item) => ({
+                id: item.id,
+                plan: getStudentReviewPlan(item.createdAt, historyByItem.get(item.id) ?? [], timeZone),
+            })).filter(({ plan }) => isReviewDue(plan, timeZone, now))
+                .sort((a, b) => a.plan.nextReviewAt!.getTime() - b.plan.nextReviewAt!.getTime());
+            const pageEntries = due.slice((page - 1) * pageSize, page * pageSize);
+            const items = await prisma.errorItem.findMany({
+                where: { id: { in: pageEntries.map((entry) => entry.id) } },
+                select: {
+                    id: true,
+                    shortId: true,
+                    questionText: true,
+                    figureSvg: true,
+                    imageFragments: true,
+                    figureScale: true,
+                    figureAlign: true,
+                    subject: { select: { name: true } },
+                },
+            });
+            const itemById = new Map(items.map((item) => [item.id, item]));
+            return NextResponse.json({
+                items: pageEntries.flatMap(({ id, plan }) => {
+                    const item = itemById.get(id);
+                    if (!item) return [];
+                    const answerOptions = getStudentAnswerOptions(item.questionText || "");
+                    return [{ ...item, subjectName: item.subject?.name ?? null, subject: undefined, ...answerOptions, reviewStage: plan.stage, nextReviewAt: plan.nextReviewAt }];
+                }),
+                total: due.length,
+                page,
+                pageSize,
+                totalPages: Math.ceil(due.length / pageSize),
+            });
+        }
         // 先只取计算计划所需的字段，到期的再查询完整内容
         const candidates = await prisma.errorItem.findMany({
             where: { userId: session.user.id, ...(subjectId ? { subjectId } : {}) },

@@ -20,6 +20,7 @@ export const ParsedQuestionSchema = z.object({
     ]),
     knowledgePoints: z.array(z.string()).max(5, "知识点最多 5 个"),
     requiresImage: z.boolean().optional().default(false), // 题目是否依赖图片（如几何题）
+    figureDescription: z.string().nullable().optional(), // 图示文字说明，独立于原题转录
     difficultyStars: z.number().int().min(1).max(5).nullable().optional(), // 难度星级 1~5，AI 未给出时为空
     gradeSemester: z.string().max(100).nullable().optional(), // 题目年级学期，AI 无法判断时为空
     hasFigure: z.boolean().optional(), // 题目是否带配图
@@ -91,12 +92,13 @@ export function parseGradeRecognition(text: string): string | null {
 export const AnswerGradingSchema = z.object({
     correct: z.union([z.boolean(), z.enum(['true', 'false']).transform((value) => value === 'true')]),
     reason: z.string().trim().min(1).max(500),
+    mistakeAnalysis: z.string().trim().max(1000).optional(),
 });
 
 /**
  * 解析 AI 判题回复
  */
-export function parseAnswerGrading(text: string): { correct: boolean; reason: string } {
+export function parseAnswerGrading(text: string): z.infer<typeof AnswerGradingSchema> {
     return AnswerGradingSchema.parse(extractJsonObject(text));
 }
 

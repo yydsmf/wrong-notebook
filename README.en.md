@@ -6,6 +6,17 @@
 
 [简体中文](README.md) | **English**
 
+## Customized Version
+
+This repository is a family learning fork of [margrop/wrong-notebook](https://github.com/margrop/wrong-notebook). Releases and issues belong to [yydsmf/wrong-notebook](https://github.com/yydsmf/wrong-notebook). The upstream badges, demo links and feature descriptions below are retained as project background.
+
+- Administrators maintain the question bank and exams. Students share the administrators' complete bank and exams while keeping separate answers and review progress.
+- The student interface focuses on reviews and exams, with multiple choice, true/false and handwritten answer uploads. AI grading provides results and analysis of incorrect answers after submission.
+- Photo import supports manual rotation before cropping and faithful transcription of wording, units and formulas. SVG figure generation is disabled during photo import; figures can be cropped from originals and uploaded repeatedly after import.
+- Background AI requests receive streamed responses with stage progress and task retries. Question rendering improves support for underlines and fraction blanks.
+
+The first preview preserves the complete upstream commit history and publishes a snapshot of the current customized application. Later upstream refactors require separate integration and verification. See the [release guide](doc/release-guide.md) for date tags and validation. npm publishing and signed Android releases remain disabled until the fork's own publishing permissions and signing configuration are ready.
+
 [![GitHub downloads](https://img.shields.io/github/downloads/margrop/wrong-notebook/total?label=downloads&logo=github)](https://github.com/margrop/wrong-notebook/releases) [![npm downloads](https://img.shields.io/npm/d18m/wrong-notebook?label=npm%20downloads&logo=npm)](https://www.npmjs.com/package/wrong-notebook) [![GitHub stars](https://img.shields.io/github/stars/margrop/wrong-notebook?logo=github)](https://github.com/margrop/wrong-notebook/stargazers) [![GitHub forks](https://img.shields.io/github/forks/margrop/wrong-notebook?logo=github)](https://github.com/margrop/wrong-notebook/forks)
 
 [![Desktop](https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-informational)](https://github.com/margrop/wrong-notebook/releases) [![Android](https://img.shields.io/badge/Android-34A853?logo=android&logoColor=white)](https://github.com/margrop/wrong-notebook/releases) [![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://github.com/margrop/wrong-notebook/pkgs/container/wrong-notebook) [![npm](https://img.shields.io/badge/npm-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/wrong-notebook) [![fnOS](https://img.shields.io/badge/fnOS-fpk-0A84FF)](https://github.com/margrop/wrong-notebook/releases) [![Web](https://img.shields.io/badge/Web-PC%20%7C%20Mobile-orange)](https://wrong-notebook-demo.margrop.net)

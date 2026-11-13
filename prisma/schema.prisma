@@ -2,7 +2,7 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
@@ -19,52 +19,53 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  educationStage String? // primary, junior_high, senior_high, university
-  enrollmentYear Int?
-  gradeRecognitionMode String @default("fixed") // 录入年级规则：fixed 固定，ai 按题目识别
-  fixedGradeSemester String? // 固定年级学期，未指定时沿用账户当前年级
+  educationStage       String? // primary, junior_high, senior_high, university
+  enrollmentYear       Int?
+  gradeRecognitionMode String  @default("fixed") // 录入年级规则：fixed 固定，ai 按题目识别
+  fixedGradeSemester   String? // 固定年级学期，未指定时沿用账户当前年级
 
-  role      String   @default("user") // "admin" or "user"
-  isActive  Boolean  @default(true)   // 用户是否启用
+  role     String  @default("user") // "admin" or "user"
+  isActive Boolean @default(true) // 用户是否启用
 
-  confirmBeforeImport Boolean @default(false) // 导入题目前是否进入人工校对页
-  questionDuplicateThreshold Float @default(90) // 百分比，相似度严格大于此值时判重
-  masteryThreshold Int @default(50) // 百分比，掌握概率达到此值视为已掌握
-  enableGeogebra Boolean @default(false) // 是否显示 GeoGebra 动态演示
-  enableSvgAnimation Boolean @default(true) // 是否显示 SVG 动画讲解
-  themePreference String @default("system") // 界面主题：system 跟随系统、light 浅色、dark 深色
+  confirmBeforeImport        Boolean @default(false) // 导入题目前是否进入人工校对页
+  questionDuplicateThreshold Float   @default(90) // 百分比，相似度严格大于此值时判重
+  masteryThreshold           Int     @default(50) // 百分比，掌握概率达到此值视为已掌握
+  enableGeogebra             Boolean @default(false) // 是否显示 GeoGebra 动态演示
+  enableSvgAnimation         Boolean @default(true) // 是否显示 SVG 动画讲解
+  themePreference            String  @default("system") // 界面主题：system 跟随系统、light 浅色、dark 深色
 
-  errorItems ErrorItem[]
-  subjects   Subject[]
-  practiceRecords PracticeRecord[]
-  customTags KnowledgeTag[] // User's custom tags
-  examPapers ExamPaper[]
-  aiUsages   AiUsage[]
-  paperGroups PaperGroup[]
+  errorItems         ErrorItem[]
+  subjects           Subject[]
+  practiceRecords    PracticeRecord[]
+  customTags         KnowledgeTag[] // User's custom tags
+  examPapers         ExamPaper[]
+  aiUsages           AiUsage[]
+  paperGroups        PaperGroup[]
+  studentSubmissions StudentSubmission[]
 }
 
 // 统一知识点标签表 (支持无限层级)
 model KnowledgeTag {
-  id        String   @id @default(cuid())
-  name      String   // 标签名，如 "勾股定理"
-  subject   String   // 学科，如 "math", "english"
+  id      String @id @default(cuid())
+  name    String // 标签名，如 "勾股定理"
+  subject String // 学科，如 "math", "english"
 
   // 层级控制 (邻接表模式)
-  parentId  String?
-  parent    KnowledgeTag?  @relation("TagHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
-  children  KnowledgeTag[] @relation("TagHierarchy")
+  parentId String?
+  parent   KnowledgeTag?  @relation("TagHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children KnowledgeTag[] @relation("TagHierarchy")
 
   // 排序与编码
-  order     Int      @default(0) // 用于保持教材顺序
-  code      String?              // 如 "1.2.1"
+  order Int     @default(0) // 用于保持教材顺序
+  code  String? // 如 "1.2.1"
 
   // 区分系统预设 vs 用户自定义
-  isSystem  Boolean  @default(false)
-  userId    String?  // 如果是用户自定义标签，绑定 userId
-  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isSystem Boolean @default(false)
+  userId   String? // 如果是用户自定义标签，绑定 userId
+  user     User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // 标签体系：标识标签所属的数据源/体系，不同体系可并存于同一学科
-  tagSet    String   @default("default")
+  tagSet String @default("default")
 
   // 与错题的多对多关系
   errorItems ErrorItem[]
@@ -87,7 +88,7 @@ model Subject {
   subjectKey String? // 学科：math / english / physics 等，仅创建时设置；为空时按名称推断
   tagSet     String  @default("default") // 标签体系：default=内置体系，其他值为导入的备选体系
   userId     String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   errorItems ErrorItem[]
 
@@ -95,37 +96,37 @@ model Subject {
   updatedAt DateTime @updatedAt
 
   @@unique([name, userId])
-  
   @@index([userId])
 }
 
 model PaperGroup {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  key       String?  // 系统预留：'a' | 'b' | 'other'；自定义为 null
-  name      String   // 显示名：A卷/B卷/单元测试/期中/期末…
-  order     Int      @default(0)
-  isActive  Boolean  @default(true) // 停用后不出现下拉里，但历史数据仍保留
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String      @id @default(cuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key        String? // 系统预留：'a' | 'b' | 'other'；自定义为 null
+  name       String // 显示名：A卷/B卷/单元测试/期中/期末…
+  order      Int         @default(0)
+  isActive   Boolean     @default(true) // 停用后不出现下拉里，但历史数据仍保留
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
   errorItems ErrorItem[]
+
   @@unique([userId, key])
   @@unique([userId, name])
   @@index([userId, order])
 }
 
 model ErrorItem {
-  id             String   @id @default(cuid())
-  shortId        String?  @unique // 6 位 base58 短 ID，创建后不变
-  userId         String
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subjectId      String?
-  subject        Subject? @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  
+  id        String   @id @default(cuid())
+  shortId   String?  @unique // 6 位 base58 短 ID，创建后不变
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
   originalImageUrl String
   ocrText          String?
-  
+
   // AI Analysis
   questionText     String? // Parsed question
   answerText       String? // AI provided answer
@@ -139,38 +140,41 @@ model ErrorItem {
   svgAnimationEn   String? // 英文版 SVG 动画讲解（已净化），界面为英文时使用
 
   // New: many-to-many relation with KnowledgeTag
-  tags             KnowledgeTag[]
-  
+  tags KnowledgeTag[]
+
   // User Metadata
-  source           String? // e.g. "Midterm Exam"
-  errorType        String? // e.g. "Calculation", "Concept"
-  userNotes        String?
-  
-  masteryLevel     Int     @default(0) // 0: New, 1: Reviewing, 2: Mastered
-  gradeSemester    String? // e.g. "Junior High Grade 2, 1st Semester"
-  paperLevel       String? // 现在存 PaperGroup.id
-  paperGroup       PaperGroup? @relation(fields: [paperLevel], references: [id], onDelete: SetNull)
-  difficultyStars  Int?    // 难度星级 1~5（参考高思导引星级），未评定时为空
-  hasFigure        Boolean @default(false) // 识别时判断题目是否有配图
-  figureSvg        String? // AI 用 SVG 重绘的题目配图（已净化），显示和打印时使用
-  figureScale      Int     @default(100) // 配图显示与打印比例，10~200%
-  figureAlign      String  @default("center") // 配图显示与打印位置：left | center | right
-  answerSpacePx    Int?    // 打印时手动设置的题下留白高度（0~600 px），为空时按全局留白档位
-  lastPractice     String? // 最近一次生成的举一反三题目与解答（JSON），再次进入练习页时直接显示
+  source    String? // e.g. "Midterm Exam"
+  errorType String? // e.g. "Calculation", "Concept"
+  userNotes String?
+
+  masteryLevel      Int         @default(0) // 0: New, 1: Reviewing, 2: Mastered
+  gradeSemester     String? // e.g. "Junior High Grade 2, 1st Semester"
+  paperLevel        String? // 现在存 PaperGroup.id
+  paperGroup        PaperGroup? @relation(fields: [paperLevel], references: [id], onDelete: SetNull)
+  difficultyStars   Int? // 难度星级 1~5（参考高思导引星级），未评定时为空
+  hasFigure         Boolean     @default(false) // 识别时判断题目是否有配图
+  figureDescription String? // 与原题转录分离的图示文字说明
+  figureSvg         String? // AI 用 SVG 重绘的题目配图（已净化），显示和打印时使用
+  imageFragments    String? // 用户手动裁剪上传的原图配图列表（JSON）
+  figureScale       Int         @default(100) // 配图显示与打印比例，10~200%
+  figureAlign       String      @default("center") // 配图显示与打印位置：left | center | right
+  answerSpacePx     Int? // 打印时手动设置的题下留白高度（0~600 px），为空时按全局留白档位
+  lastPractice      String? // 最近一次生成的举一反三题目与解答（JSON），再次进入练习页时直接显示
 
   // 根据举一反三历史推测的掌握情况
-  masteryProbability Float?    // 0~1
+  masteryProbability Float? // 0~1
   masteryReason      String?
-  masterySource      String?   // ai | rule
+  masterySource      String? // ai | rule
   masteryEvaluatedAt DateTime?
-  
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   reviewSchedules ReviewSchedule[]
   practiceRecords PracticeRecord[]
   examQuestions   ExamQuestion[]
-  
+  studentAnswers  StudentAnswer[]
+
   // 列表、统计都按用户取错题并按时间排序；SQLite 不会自动给外键建索引
   @@index([userId, createdAt])
   @@index([subjectId])
@@ -180,41 +184,41 @@ model ReviewSchedule {
   id          String    @id @default(cuid())
   errorItemId String
   errorItem   ErrorItem @relation(fields: [errorItemId], references: [id], onDelete: Cascade)
-  
+
   scheduledFor DateTime
   completedAt  DateTime?
   isCorrect    Boolean? // Result of the review
-  
-  createdAt    DateTime @default(now())
-  
+
+  createdAt DateTime @default(now())
+
   @@index([errorItemId])
 }
 
 model PracticeRecord {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  subject   String?  // e.g. "Math", "Physics"
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  subject    String? // e.g. "Math", "Physics"
   difficulty String? // "easy", "medium", "hard", "harder"
-  isCorrect Boolean?
+  isCorrect  Boolean?
 
   // 举一反三记录：关联原题，保存生成的题目与结果
-  errorItemId  String?
-  errorItem    ErrorItem? @relation(fields: [errorItemId], references: [id], onDelete: Cascade)
-  result       String?  // correct | wrong | not_attempted
-  questionText String?
-  answerText   String?
-  analysis     String?
-  wrongAnswerText String? // 本次作答快照，避免重复导入时覆盖原题
-  mistakeAnalysis String?
+  errorItemId      String?
+  errorItem        ErrorItem?    @relation(fields: [errorItemId], references: [id], onDelete: Cascade)
+  result           String? // correct | wrong | not_attempted
+  questionText     String?
+  answerText       String?
+  analysis         String?
+  wrongAnswerText  String? // 本次作答快照，避免重复导入时覆盖原题
+  mistakeAnalysis  String?
   originalImageUrl String?
-  figureSvg    String?  // 举一反三新题的 SVG 配图
-  source       String   @default("practice") // practice | manual | exam | duplicate_import
+  figureSvg        String? // 举一反三新题的 SVG 配图
+  source           String        @default("practice") // practice | manual | exam | duplicate_import
   // 试卷题目可多次录入结果，每次一条记录
-  examQuestionId String?
-  examQuestion   ExamQuestion? @relation(fields: [examQuestionId], references: [id], onDelete: SetNull)
-  
+  examQuestionId   String?
+  examQuestion     ExamQuestion? @relation(fields: [examQuestionId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
 
   @@index([errorItemId, createdAt])
@@ -224,47 +228,95 @@ model PracticeRecord {
 
 // 随机错题试卷
 model ExamPaper {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title      String
-  status     String   @default("generating") // generating | ready | partial | failed
-  scope      String   // unmastered | mastered | all
-  difficulty String   // easy | medium | hard | harder
-  requestedCount Int
-  subjectIds String   // JSON 数组
-  tagNames   String?  // JSON 数组
+  id                String    @id @default(cuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title             String
+  status            String    @default("generating") // generating | ready | partial | failed
+  scope             String // unmastered | mastered | all
+  difficulty        String // easy | medium | hard | harder
+  requestedCount    Int
+  subjectIds        String // JSON 数组
+  tagNames          String? // JSON 数组
   resultsRecordedAt DateTime?
 
-  questions  ExamQuestion[]
+  questions ExamQuestion[]
 
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId, createdAt])
 }
 
 model ExamQuestion {
-  id            String     @id @default(cuid())
-  paperId       String
-  paper         ExamPaper  @relation(fields: [paperId], references: [id], onDelete: Cascade)
-  order         Int
-  errorItemId   String?
-  errorItem     ErrorItem? @relation(fields: [errorItemId], references: [id], onDelete: SetNull)
-  sourceShortId String     // 来源题目短 ID 快照，原题删除后仍保留
-  status        String     @default("pending") // pending | ready | failed
-  questionText  String?
-  answerText    String?
-  analysis      String?
-  figureSvg     String?    // 新题的 SVG 配图
-  figureScale   Int        @default(100) // 配图显示与打印比例，10~200%
-  figureAlign   String     @default("center") // 配图显示与打印位置：left | center | right
-  answerSpacePx Int?       // 打印时手动设置的题下留白高度（0~600 px），为空时按全局留白档位
-  error         String?
+  id               String           @id @default(cuid())
+  paperId          String
+  paper            ExamPaper        @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  order            Int
+  errorItemId      String?
+  errorItem        ErrorItem?       @relation(fields: [errorItemId], references: [id], onDelete: SetNull)
+  sourceShortId    String // 来源题目短 ID 快照，原题删除后仍保留
+  status           String           @default("pending") // pending | ready | failed
+  questionText     String?
+  answerText       String?
+  analysis         String?
+  figureSvg        String? // 新题的 SVG 配图
+  figureScale      Int              @default(100) // 配图显示与打印比例，10~200%
+  figureAlign      String           @default("center") // 配图显示与打印位置：left | center | right
+  answerSpacePx    Int? // 打印时手动设置的题下留白高度（0~600 px），为空时按全局留白档位
+  error            String?
   practiceRecordId String? // [DEPRECATED] 旧版一对一关联，部署校验要求保留已有列，改用 PracticeRecord.examQuestionId
-  practiceRecords PracticeRecord[]
+  practiceRecords  PracticeRecord[]
+  studentAnswers   StudentAnswer[]
 
   @@index([paperId, order])
+}
+
+// 普通用户独立的复习/试卷提交批次，不写入管理员的 PracticeRecord。
+model StudentSubmission {
+  id           String          @id @default(cuid())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind         String // review | exam
+  examPaperId  String?
+  status       String          @default("grading") // grading | completed | failed
+  totalCount   Int
+  gradedCount  Int             @default(0)
+  correctCount Int             @default(0)
+  createdAt    DateTime        @default(now())
+  completedAt  DateTime?
+  answers      StudentAnswer[]
+
+  @@index([userId, kind, createdAt])
+  @@index([userId, examPaperId, createdAt])
+}
+
+// 答题内容与参考答案均保存快照；判分前 API 不返回参考答案字段。
+model StudentAnswer {
+  id                 String            @id @default(cuid())
+  submissionId       String
+  submission         StudentSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  errorItemId        String?
+  errorItem          ErrorItem?        @relation(fields: [errorItemId], references: [id], onDelete: SetNull)
+  examQuestionId     String?
+  examQuestion       ExamQuestion?     @relation(fields: [examQuestionId], references: [id], onDelete: SetNull)
+  questionText       String
+  answerText         String
+  analysis           String?
+  originalImageUrl   String?
+  figureSvg          String?
+  imageFragments     String?
+  userAnswer         String?
+  userAnswerImageUrl String?
+  status             String            @default("pending") // pending | grading | graded | failed
+  isCorrect          Boolean?
+  reason             String?
+  mistakeAnalysis    String?
+  createdAt          DateTime          @default(now())
+
+  @@index([submissionId, status])
+  @@index([errorItemId, submissionId])
+  @@index([examQuestionId, submissionId])
 }
 
 // 用户发起的 AI 调用记录，用于每日额度和用量统计（不含后台自动的掌握概率评估）
@@ -272,7 +324,7 @@ model AiUsage {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  kind      String   // analyze | reanswer | practice | grade | figure | latex | geogebra | animation | exam | retag
+  kind      String // analyze | reanswer | practice | grade | figure | latex | geogebra | animation | exam | retag
   createdAt DateTime @default(now())
 
   @@index([userId, createdAt])

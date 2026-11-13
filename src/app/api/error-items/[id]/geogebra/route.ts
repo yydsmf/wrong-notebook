@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { unauthorized, forbidden, notFound, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
-import { describeQuestion, trackBackgroundTask } from "@/lib/background-tasks";
+import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { getAIService } from "@/lib/ai";
 import { consumeAiQuota } from "@/lib/ai-quota";
 import { withRecoverableResponse } from "@/lib/recoverable-response";
@@ -78,8 +78,9 @@ async function handlePost(
         const answerText = body.answerText || errorItem.answerText || "";
         const previousErrors = body.previousErrors || "";
 
-        const result = await trackBackgroundTask(
-            { userId: user.id, kind: 'geogebra', subject: describeQuestion(errorItem), link: `/error-items/${id}` },
+        const result = await trackBackgroundTaskForRequest(
+            req,
+            { userId: user.id, kind: 'geogebra', subject: describeQuestion(errorItem), link: `/error-items/${id}`, retryRequest: { path: `/api/error-items/${id}/geogebra`, body: { questionText, answerText, previousErrors } } },
             () => aiService.analyzeForGeogebra(questionText, answerText, errorItem.analysis || "", previousErrors)
         );
 

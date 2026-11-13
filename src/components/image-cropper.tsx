@@ -4,14 +4,15 @@ import { useEffect, useState, useRef } from "react";
 import type { CSSProperties } from "react";
 import ReactCrop from "react-image-crop";
 import type { Crop } from "react-image-crop";
+import { RefreshCcw, RotateCcw, RotateCw } from "lucide-react";
 import "react-image-crop/dist/ReactCrop.css";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { RegionSelector } from "@/components/region-selector";
 import { ZoomControls } from "@/components/zoom-controls";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { cropImageRegions, toSafeImageSrc } from "@/lib/image-crop";
-import type { ImageRegion } from "@/lib/image-crop";
+import { createRotatedImagePreview, cropImageRegions, normalizeImageRotation, toSafeImageSrc } from "@/lib/image-crop";
+import type { ImageRegion, ImageRotation } from "@/lib/image-crop";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { useImageZoom } from "@/lib/use-image-zoom";
 
@@ -25,14 +26,21 @@ interface ImageCropperProps {
     imageSrc: string;
     open: boolean;
     onClose: () => void;
-    onCropComplete: (croppedImageBlob: Blob) => void;
+    onCropComplete?: (croppedImageBlob: Blob) => void;
     /** 提供时显示「多题框选」模式，返回每个框裁剪出的图片 */
     onMultiCropComplete?: (croppedImageBlobs: Blob[]) => void;
+    /** 提供时只返回相对坐标，由调用方从已解码的原图裁剪 */
+    onRegionsSelected?: (regions: ImageRegion[], multi: boolean, rotation: ImageRotation) => void;
+    /** 显示多区域框选模式；结果仍由 onRegionsSelected 返回给调用方处理。 */
+    enableMultiCrop?: boolean;
 }
 
-export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiCropComplete }: ImageCropperProps) {
+export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiCropComplete, onRegionsSelected, enableMultiCrop = false }: ImageCropperProps) {
     const { t } = useLanguage();
-    const safeImageSrc = toSafeImageSrc(imageSrc);
+    const [rotation, setRotation] = useState<ImageRotation>(0);
+    const [displayImageSrc, setDisplayImageSrc] = useState(imageSrc);
+    const generatedPreviewRef = useRef<string | null>(null);
+    const safeImageSrc = toSafeImageSrc(displayImageSrc);
     // 始终保存百分比坐标，缩放改变图片显示尺寸后仍然准确
     const [crop, setCrop] = useState<Crop>();
     const imgRef = useRef<HTMLImageElement>(null);
@@ -48,12 +56,66 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
     };
     // 框选结果与图片绑定，换图后自动清空
     const [regionState, setRegionState] = useState<{ src: string; regions: ImageRegion[] }>({ src: imageSrc, regions: [] });
-    const regions = regionState.src === imageSrc ? regionState.regions : [];
-    const setRegions = (next: ImageRegion[]) => setRegionState({ src: imageSrc, regions: next });
+    const regions = regionState.src === displayImageSrc ? regionState.regions : [];
+    const setRegions = (next: ImageRegion[]) => setRegionState({ src: displayImageSrc, regions: next });
     const multiImgRef = useRef<HTMLImageElement>(null);
 
+    const releaseGeneratedPreview = () => {
+        if (generatedPreviewRef.current) {
+            URL.revokeObjectURL(generatedPreviewRef.current);
+            generatedPreviewRef.current = null;
+        }
+    };
+
+    useEffect(() => () => releaseGeneratedPreview(), [imageSrc]);
+
+    useEffect(() => {
+        let active = true;
+        releaseGeneratedPreview();
+        if (rotation === 0) {
+            return () => {
+                active = false;
+            };
+        }
+
+        void createRotatedImagePreview(imageSrc, rotation).then((url) => {
+            if (!active) {
+                URL.revokeObjectURL(url);
+                return;
+            }
+            generatedPreviewRef.current = url;
+            setDisplayImageSrc(url);
+            setRegionState({ src: url, regions: [] });
+        }).catch((error) => {
+            frontendLogger.error('[ImageCropper]', 'Rotation preview failed', { error });
+            if (active) setDisplayImageSrc(imageSrc);
+        });
+
+        return () => {
+            active = false;
+        };
+    }, [imageSrc, rotation]);
+
+    useEffect(() => () => releaseGeneratedPreview(), []);
+
+    const rotate = (delta: number) => {
+        const next = normalizeImageRotation(rotation + delta);
+        setRotation(next);
+        if (next === 0) {
+            setDisplayImageSrc(imageSrc);
+            setRegionState({ src: imageSrc, regions: [] });
+        }
+        resetZoom();
+    };
+
     const handleMultiConfirm = async () => {
-        if (!multiImgRef.current || regions.length === 0 || !onMultiCropComplete) return;
+        if (regions.length === 0) return;
+        if (onRegionsSelected) {
+            onRegionsSelected(regions, true, rotation);
+            setRegions([]);
+            return;
+        }
+        if (!multiImgRef.current || !onMultiCropComplete) return;
         try {
             onMultiCropComplete(await cropImageRegions(multiImgRef.current, regions));
             setRegions([]);
@@ -75,8 +137,12 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
             ? { x: crop.x / 100, y: crop.y / 100, width: crop.width / 100, height: crop.height / 100 }
             : { x: 0, y: 0, width: 1, height: 1 };
         try {
+            if (onRegionsSelected) {
+                onRegionsSelected([region], false, rotation);
+                return;
+            }
             const [croppedBlob] = await cropImageRegions(imgRef.current, [region]);
-            onCropComplete(croppedBlob);
+            onCropComplete?.(croppedBlob);
         } catch (e) {
             frontendLogger.error('[ImageCropper]', 'Crop failed', { error: e });
         }
@@ -115,13 +181,43 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
                             )}
                         </div>
                     </div>
-                    <div className="absolute right-3 top-3">
+                    <div className="absolute right-3 top-3 flex items-center gap-2">
+                        <div className="flex items-center gap-0.5 rounded-full bg-black/60 p-1 shadow-lg backdrop-blur-sm">
+                            <button
+                                type="button"
+                                className="flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors hover:bg-white/20 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                                onClick={() => rotate(-90)}
+                                aria-label={t.common.cropper.rotateLeft}
+                                title={t.common.cropper.rotateLeft}
+                            >
+                                <RotateCcw className="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                className="flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors hover:bg-white/20 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                                onClick={() => rotate(90)}
+                                aria-label={t.common.cropper.rotateRight}
+                                title={t.common.cropper.rotateRight}
+                            >
+                                <RotateCw className="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                className="flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors hover:bg-white/20 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                                onClick={() => rotate(-rotation)}
+                                disabled={rotation === 0}
+                                aria-label={t.common.cropper.resetRotation}
+                                title={t.common.cropper.resetRotation}
+                            >
+                                <RefreshCcw className="h-4 w-4" />
+                            </button>
+                        </div>
                         <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={resetZoom} />
                     </div>
                 </div>
 
                 <div className="p-4 border-t bg-background shrink-0 space-y-3">
-                    {onMultiCropComplete && (
+                    {(onMultiCropComplete || enableMultiCrop) && (
                         <div className="grid grid-cols-2 gap-1 rounded-md bg-muted p-1 sm:w-80">
                             {(["single", "multi"] as const).map((value) => (
                                 <button

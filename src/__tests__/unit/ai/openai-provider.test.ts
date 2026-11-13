@@ -55,7 +55,7 @@ import { OpenAIProvider } from '@/lib/ai/openai-provider';
 import type { ParsedQuestion } from '@/lib/ai/types';
 
 type PrivateOpenAIProvider = {
-    parseResponse(text: string): ParsedQuestion;
+    parseResponse(text: string, includeFigureSvg?: boolean): ParsedQuestion;
     extractTag(text: string, tagName: string): string | null;
     handleError(error: unknown): never;
 };
@@ -93,9 +93,24 @@ describe('OpenAI Provider 响应解析', () => {
             mockCompletionCreate.mockResolvedValue(badResponse);
             await expect(provider.generateSimilarQuestion('原题', [])).rejects.toThrow('AI_RESPONSE_ERROR');
         });
+
+        it('流式响应会合并分片后再按原协议解析', async () => {
+            async function* chunks() {
+                yield { id: 'stream-1', created: 1, model: 'gpt-4o', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: '<question_text>新' }, finish_reason: null }] };
+                yield { id: 'stream-1', created: 1, model: 'gpt-4o', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: '题</question_text><answer_text>A</answer_text><analysis>An</analysis><subject>数学</subject>' }, finish_reason: 'stop' }] };
+                yield { id: 'stream-1', created: 1, model: 'gpt-4o', object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } };
+            }
+
+            mockCompletionCreate.mockResolvedValue(chunks());
+            const result = await provider.generateSimilarQuestion('原题', []);
+
+            expect(result.questionText).toBe('新题');
+            expect(mockCompletionCreate.mock.calls[0][0]).toMatchObject({ stream: true, stream_options: { include_usage: true } });
+        });
+
         it('解析配图标签，SVG 经净化', () => {
             const base = '<question_text>Q</question_text><answer_text>A</answer_text><analysis>An</analysis><subject>数学</subject>';
-            const parsed = asPrivateProvider(provider).parseResponse(base + '<has_figure>true</has_figure><figure_svg><svg onload="x()"><rect width="1" height="1"/></svg></figure_svg>');
+            const parsed = asPrivateProvider(provider).parseResponse(base + '<has_figure>true</has_figure><figure_svg><svg onload="x()"><rect width="1" height="1"/></svg></figure_svg>', true);
             expect(parsed.hasFigure).toBe(true);
             expect(parsed.figureSvg).toContain('<rect');
             expect(parsed.figureSvg).not.toContain('onload');

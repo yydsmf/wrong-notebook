@@ -59,7 +59,7 @@ export async function POST(
         const limited = await consumeAiQuota(user, 'retag');
         if (limited) return limited;
 
-        return NextResponse.json(await startRetagJob(user.id, id), { status: 202 });
+        return NextResponse.json(await startRetagJob(user.id, id, true), { status: 202 });
     } catch (error) {
         logger.error({ error }, 'Error starting retag job');
         return internalError("Failed to start retag job");

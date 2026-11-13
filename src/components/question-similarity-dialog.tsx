@@ -6,7 +6,7 @@ import { GitCompareArrows, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { DuplicateThresholdSetting } from '@/components/settings/duplicate-threshold-setting';
-import { MarkdownRenderer } from '@/components/markdown-renderer';
+import { QuestionTextRenderer } from '@/components/question-text-renderer';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { apiClient } from '@/lib/api-client';
 import { frontendLogger } from '@/lib/frontend-logger';
@@ -78,7 +78,7 @@ export function QuestionSimilarityDialog({ ids }: QuestionSimilarityDialogProps)
                                         {t.questionSimilarity.question.replace('{index}', String(index + 1))} · {item.shortId || '-'}
                                     </Link>
                                     {item.notebookName && <p className="text-xs text-muted-foreground">{item.notebookName}</p>}
-                                    <div className="max-h-56 overflow-auto text-sm"><MarkdownRenderer content={item.questionText} /></div>
+                                    <div className="max-h-56 overflow-auto text-sm"><QuestionTextRenderer content={item.questionText} /></div>
                                 </div>
                             ))}
                         </div>

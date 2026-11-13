@@ -28,9 +28,9 @@ export function invalidatePaperGroupsCache() {
  * 拉取当前用户的卷别分组列表（含停用），带 30s 客户端缓存。
  * 用于所有卷别下拉/筛选/管理页。
  */
-export function usePaperGroups() {
+export function usePaperGroups(enabled = true) {
     const [groups, setGroups] = useState<PaperGroup[]>(cachedGroups ?? []);
-    const [loading, setLoading] = useState(!cachedGroups);
+    const [loading, setLoading] = useState(enabled && !cachedGroups);
     const [error, setError] = useState<string | null>(null);
 
     const fetchGroups = useCallback(async (force = false) => {
@@ -57,16 +57,17 @@ export function usePaperGroups() {
     }, []);
 
     useEffect(() => {
+        if (!enabled) return;
         subscribers.add(setGroups);
         // eslint-disable-next-line react-hooks/set-state-in-effect -- 数据请求：进入页面时加载分组
         fetchGroups();
         return () => { subscribers.delete(setGroups); };
-    }, [fetchGroups]);
+    }, [enabled, fetchGroups]);
 
     const refetch = useCallback(() => {
         invalidatePaperGroupsCache();
         return fetchGroups(true);
     }, [fetchGroups]);
 
-    return { groups, loading, error, refetch };
+    return { groups, loading: enabled && loading, error, refetch };
 }

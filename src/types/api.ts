@@ -18,6 +18,50 @@ export interface DueReviewItem extends ErrorItem {
     /** 当前所在轮次（从 0 开始），等于末尾连续做对的次数 */
     reviewStage: number;
     nextReviewAt: string;
+    mode?: 'choice' | 'boolean' | 'written';
+    options?: { value: string; label: string }[];
+    subjectName?: string | null;
+}
+
+export interface StudentAnswerQuestion {
+    id: string;
+    questionText: string;
+    figureSvg?: string | null;
+    imageFragments?: { id: string; imageUrl: string; order: number }[] | string | null;
+    figureScale?: number;
+    figureAlign?: 'left' | 'center' | 'right' | string;
+    mode?: 'choice' | 'boolean' | 'written';
+    options?: { value: string; label: string }[];
+}
+
+export interface StudentSubmissionAnswer {
+    id: string;
+    errorItemId: string | null;
+    examQuestionId: string | null;
+    questionText: string;
+    answerText?: string;
+    analysis?: string | null;
+    figureSvg?: string | null;
+    imageFragments?: string | null;
+    userAnswer: string | null;
+    userAnswerImageUrl: string | null;
+    status: 'pending' | 'grading' | 'graded' | 'failed';
+    isCorrect: boolean | null;
+    reason: string | null;
+    mistakeAnalysis: string | null;
+}
+
+export interface StudentSubmission {
+    id: string;
+    kind: 'review' | 'exam';
+    examPaperId: string | null;
+    status: 'grading' | 'completed' | 'failed';
+    totalCount: number;
+    gradedCount: number;
+    correctCount: number;
+    createdAt: string;
+    completedAt: string | null;
+    answers: StudentSubmissionAnswer[];
 }
 
 export interface Tag {
@@ -91,7 +135,9 @@ export interface ErrorItem {
     paperLevel?: string | null;
     difficultyStars?: number | null; // 难度星级 1~5
     hasFigure?: boolean;             // 是否有配图
+    figureDescription?: string | null; // 与原题转录分离的图示说明
     figureSvg?: string | null;       // AI 重绘的 SVG 配图
+    imageFragments?: string | null;  // 用户手动裁剪上传的原图配图列表（JSON）
     figureScale?: number;            // 配图显示与打印比例，默认 100%
     figureAlign?: 'left' | 'center' | 'right' | string; // 配图显示与打印位置，默认 center
     answerSpacePx?: number | null;   // 打印时手动设置的题下留白（px），为空时按全局档位
@@ -108,7 +154,7 @@ export type ErrorItemSummary = Pick<ErrorItem,
 
 /** 打印所需内容，独立于完整详情与列表卡片的数据类型。 */
 export type PrintableErrorItem = ErrorItemSummary & Pick<ErrorItem,
-    'originalImageUrl' | 'answerText' | 'analysis' | 'figureSvg' | 'figureScale' | 'figureAlign' | 'answerSpacePx' | 'gradeSemester' | 'paperLevel'
+    'originalImageUrl' | 'answerText' | 'analysis' | 'figureSvg' | 'imageFragments' | 'figureScale' | 'figureAlign' | 'answerSpacePx' | 'gradeSemester' | 'paperLevel'
 > & { subject?: Pick<Notebook, 'name'> | null };
 
 // For creation/updates
@@ -396,6 +442,10 @@ export interface ExamQuestionDetail {
     notebookName: string | null;
     /** 历次录入的结果，按时间正序 */
     attempts: ExamQuestionAttempt[];
+    questionImageUrl?: string | null;
+    imageFragments?: { id: string; imageUrl: string; order: number }[];
+    mode?: 'choice' | 'boolean' | 'written';
+    options?: { value: string; label: string }[];
 }
 
 export interface ExamQuestionAttempt {

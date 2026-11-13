@@ -134,7 +134,7 @@ export function generateFieldLanguageInstruction(language: 'zh' | 'en', generate
 }
 
 export const QUESTION_OUTPUT_TAGS = {
-  analyze: ['subject', 'knowledge_points', 'requires_image', 'has_figure', 'figure_svg', 'wrong_answer_text', 'mistake_status', 'difficulty_stars', 'mistake_analysis', 'question_text', 'answer_text', 'analysis', 'grade_semester'],
+  analyze: ['subject', 'knowledge_points', 'requires_image', 'has_figure', 'figure_description', 'wrong_answer_text', 'mistake_status', 'difficulty_stars', 'mistake_analysis', 'question_text', 'answer_text', 'analysis', 'grade_semester'],
   similar: ['question_text', 'answer_text', 'analysis', 'figure_svg'],
   reanswer: ['answer_text', 'analysis', 'knowledge_points', 'wrong_answer_text', 'mistake_status', 'mistake_analysis', 'subject', 'difficulty_stars', 'grade_semester'],
 } as const;
@@ -215,7 +215,7 @@ export const FIGURE_SVG_RULES = `- 输出一个完整的 <svg> 元素，包含 x
  * 过滤图片中人的思考过程与草稿演算的规则（图片解析、重新解题共用）
  */
 export const DRAFT_FILTER_RULES = `【过滤草稿与思考过程规则】
-- question_text 只转录原题本身，必须过滤掉图片中人的思考过程、手写草稿、竖式演算、试算过程、审题圈画、旁批注释以及填在横线或括号里的手写答案；已被手写填入答案的填空处必须还原为空白（____ 或空括号）。
+- question_text 只转录原题本身，必须过滤掉图片中人的思考过程、手写草稿、竖式演算、试算过程、审题圈画、旁批注释以及填空处的手写答案。处理填空时先辨认原图中印刷的空格结构，再只移除覆盖在空格里的手写答案；不得把括号、方括号、分数线、单位、横线、上下排列等印刷内容误判为手写并删除。普通横线空还原为空线；分数或其他上下结构空必须保留原图所有印刷符号。例如原图分数线上下分别印有括号、括号内有手写数字，清除数字后必须写作 $\\frac{(\\square)}{(\\square)}$；原图没有括号时才写作 $\\frac{\\square}{\\square}$。不能把上下结构压成单个 ____，也不要写成 $\\frac{____}{____}$。输出前逐项对照原图复核每个空格的括号、分隔线、单位和相对位置，只允许清除手写作答，不得规范化或简化原有版式。
 - wrong_answer_text 和 mistake_analysis 只记录和分析学生针对本题写出的正式错误答案或正式解题步骤，必须过滤掉空白处或题干旁的零散草稿、竖式演算、试算涂改和人的思考批注；若图片中仅有草稿或思考痕迹而无正式错误作答，wrong_answer_text 和 mistake_analysis 必须留空。`;
 
 /**
@@ -254,11 +254,9 @@ export const DEFAULT_ANALYZE_TEMPLATE = `【角色与核心任务 (ROLE AND CORE
 判断题目本身是否带有配图（几何图形、函数图像、示意图、统计图、实验装置图、电路图等；不含学生的作答痕迹和纯文字表格）。有配图填 true，否则填 false。
 </has_figure>
 
-<figure_svg>
-如果 has_figure 为 true，用 SVG 重新绘制题目配图：
-${FIGURE_SVG_RULES}
-如果 has_figure 为 false，请留空。
-</figure_svg>
+<figure_description>
+如果 has_figure 为 true，用简洁、客观的文字描述图形的结构、位置关系、分割方式和关键标注，供没有图片的场景参考；如果没有配图请留空。此内容不是原题转录，不要混入 question_text。
+</figure_description>
 
 <wrong_answer_text>
 如果图片中包含学生针对本题提交的正式错误答案或正式解题步骤，请按原样摘录；必须过滤掉空白处或题干旁的草稿、竖式演算、试算数字、涂改痕迹、审题圈画以及人的思考过程批注。如果图片中只有草稿/思考痕迹或没有看到正式错误解答，请留空。
@@ -281,11 +279,13 @@ ${DIFFICULTY_STARS_RULES}
 在此处填写题目的完整文本。使用 Markdown 格式。所有数学公式使用 LaTeX 符号（行内 $...$，块级 $$...$$）。
 
 【题干转录规则】
-1. **逐字照录**：只按图片原题转录题干（含题号、分值和标点），不要改写、概括、增删字词或调整语序；看不清的字用 [?] 标注。
-2. **过滤草稿与思考过程**：必须过滤掉图片中人的手写草稿、竖式演算、试算算式、思考过程批注、审题圈画、涂改痕迹以及学生在横线或括号中填入的答案，严禁将草稿或人的思考过程记录进 question_text。
-3. **填空统一**：所有填空处（含已被学生手写填入答案的横线）统一还原写作 ____（4 个下划线），不论原图横线长短。
-4. **选择题选项另起一行**：如果题目是选择题，题干与选项必须分行，选项必须在题干下方另起新行书写（不要将选项紧接在题干同一行后面）。
-5. **图形描述**：如果题目依赖图形，在题干原文之后空一行，单独写**一段**以「图示：」开头的图形描述；只能使用「图示：」这一种写法（不要写「图示信息」「图示说明」等），描述中不要重复题干已有的文字，且不要包含学生的手写草稿或作答痕迹。题目不依赖图形时不要写图示段落。
+1. **逐字照录**：只按图片原题转录题干（含题号、分值、数字、单位、符号和标点），不要改写、概括、增删字词或调整语序；看不清的字用 [?] 标注。
+2. **过滤草稿与思考过程**：必须过滤掉图片中人的手写草稿、竖式演算、试算算式、思考过程批注、审题圈画和涂改痕迹；清除学生在填空处填写的答案时，必须保留原题印刷的空位结构，不能因过滤手写内容而删除分数线、括号、上下排列或其他版式，也不能把结构化空压成单个横线空。严禁将草稿或人的思考过程记录进 question_text。
+3. **原文保真锁定**：原题中的数字、单位、分数、数量关系、专有名词和文字表达必须原样保留，严禁单位换算、同义改写或把等价表达替换成另一种写法。例如图片写“1分米”时必须写“1分米”，不得改成“10厘米”；图片写“1米”时不得改成“100厘米”。
+4. **填空版式保真**：普通横向填空（含已被手写答案覆盖的横线）统一还原写作 ____（4 个下划线），不论原图横线长短。结构化填空必须先逐项辨认印刷结构，再只清除手写答案，不得套用单个 ____ 或擅自简化原图符号。例如原图分数线上下分别印有括号，括号内的数字是手写答案时，转录为 $\\frac{(\\square)}{(\\square)}$；只有原图确实没有括号时，才写作 $\\frac{\\square}{\\square}$。保留分数线、括号/方括号、单位、其他分隔符和上下排列关系；不要写成 $\\frac{____}{____}$，因为下划线不是稳定的分数空表示。输出前对照原图检查每个括号是否在原图中存在，并确保只移除了手写笔迹，没有删除任何印刷符号。
+5. **图片方向与阅读顺序**：先判断图片是否旋转、倒置或倾斜，按校正后的正确阅读方向完整读取题目，再按原图阅读顺序转录，不能因为换行、旋转或手写覆盖而省略后半句。
+6. **选择题选项另起一行**：如果题目是选择题，题干与选项必须分行，选项必须在题干下方另起新行书写（不要将选项紧接在题干同一行后面）。
+7. **图形内容分离**：题目依赖图形时，只在 figure_description 中描述图形；question_text 必须保持原题文字，不得加入「图示：」或其他由模型补写的图形说明。题目不依赖图形时 figure_description 留空。
 
 【表格处理规则】
 如果图片中包含表格，必须完整转录表格内容，遵循以下原则：
@@ -346,7 +346,8 @@ ${DIFFICULTY_STARS_RULES}
 2. **纯文本**：内容作为纯文本处理，**不要转义反斜杠**。
 3. **内容完整**：如果包含子问题，请在 question_text 中完整列出。
 4. **禁止图片**：严禁包含任何图片链接或 markdown 图片语法。
-5. **LaTeX 规范**：
+5. **字段分离**：question_text 只保存原题转录；figure_description 只保存原题图形说明，不得把图形说明混入题干。
+6. **LaTeX 规范**：
 ${LATEX_RULES}
 
 {{grade_instruction}}
@@ -608,7 +609,7 @@ ${englishTagsString}`;
     generateOutputContract('analyze'), DRAFT_FILTER_RULES, langInstruction, LATEX_RULES,
     generateGradeInstruction(gradeSemester), generateGradeRecognitionInstruction(gradeSemester),
     tagsSection, DIFFICULTY_STARS_RULES,
-    '有配图时必须输出 figure_svg；无配图时留空。' + FIGURE_SVG_RULES,
+    '有配图时输出 figure_description，客观描述图形结构与可见标注；不得绘制、重建或输出 SVG。',
   ].filter(Boolean).join('\n\n');
 }
 
@@ -1185,7 +1186,7 @@ export const DEFAULT_GRADING_TEMPLATE = `【角色与核心任务 (ROLE AND CORE
 
 【输出格式】
 只输出一个 JSON 对象，不要输出任何其他内容：
-{"correct": true 或 false, "reason": "一句话说明判定依据，不超过 60 字"}`;
+{"correct": true 或 false, "reason": "一句话说明判定依据，不超过 60 字", "mistakeAnalysis": "答错时指出学生具体错误及正确思路；答对时为空字符串"}`;
 
 /**
  * 生成判题提示词
@@ -1195,6 +1196,7 @@ export function generateGradingPrompt(input: {
   answerText: string;
   analysis?: string | null;
   userAnswer: string;
+  hasImageAnswer?: boolean;
   language?: 'zh' | 'en';
 }): string {
   return replaceVariables(DEFAULT_GRADING_TEMPLATE, {
@@ -1204,7 +1206,7 @@ export function generateGradingPrompt(input: {
     question_text: input.questionText,
     answer_text: input.answerText || '（无）',
     analysis: input.analysis || '（无）',
-    user_answer: input.userAnswer,
+    user_answer: input.userAnswer || (input.hasImageAnswer ? '（见随请求提供的手写答案图片）' : '（未作答）'),
   }).trim();
 }
 

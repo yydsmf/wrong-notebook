@@ -20,6 +20,18 @@ export async function proxy(req: NextRequest) {
         // /initialize：全新安装时用一次性初始化链接创建管理员，未登录也要能打开
         const isAuthPage = ["/login", "/register", "/initialize"].some((prefix) => req.nextUrl.pathname.startsWith(prefix));
         const isAdminPage = req.nextUrl.pathname.startsWith("/admin");
+        const isApiRequest = req.nextUrl.pathname.startsWith("/api/");
+        const isStudentRestrictedApi = [
+            /^\/api\/(?:error-items|import|analyze|stats|settings|tags|export)(?:\/|$)/,
+            /^\/api\/notebooks(?:\/|$)/,
+            /^\/api\/practice(?:\/|$)/,
+            /^\/api\/(?:admin|ai|analytics|geogebra-analyze|minimax-code|openclaw|paper-groups|reanswer|requests|setup|tasks|tts)(?:\/|$)/,
+        ].some((pattern) => pattern.test(req.nextUrl.pathname));
+        const isSharedNotebookRead = req.method === "GET"
+            && /^\/api\/notebooks(?:\/[^/]+)?$/.test(req.nextUrl.pathname);
+        const isStudentAnswerApi = req.nextUrl.pathname.startsWith("/api/student-submissions");
+        const isStudentOnlyBlockedPage = ["/", "/notebooks", "/error-items", "/practice", "/stats", "/tags"]
+            .some((prefix) => req.nextUrl.pathname === prefix || req.nextUrl.pathname.startsWith(`${prefix}/`));
 
         logger.debug({
             path: req.nextUrl.pathname,
@@ -35,6 +47,15 @@ export async function proxy(req: NextRequest) {
                 return NextResponse.redirect(new URL("/", req.url));
             }
             return null;
+        }
+
+        if (isApiRequest && !isAuth) {
+            return NextResponse.json({ message: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
+        }
+
+        if (isApiRequest && token?.role !== "admin" && isStudentRestrictedApi
+            && !isSharedNotebookRead && !isStudentAnswerApi) {
+            return NextResponse.json({ message: "Admin role required", code: "FORBIDDEN" }, { status: 403 });
         }
 
         if (!isAuth) {
@@ -61,6 +82,10 @@ export async function proxy(req: NextRequest) {
             logger.warn({ userId: token?.id, path: req.nextUrl.pathname }, 'Non-admin user attempting to access admin area');
             return NextResponse.redirect(new URL("/", req.url));
         }
+
+        if (token?.role !== "admin" && (isStudentOnlyBlockedPage || /^\/exams\/[^/]+\/print/.test(req.nextUrl.pathname))) {
+            return NextResponse.redirect(new URL("/review", req.url));
+        }
     } catch (e) {
         // 无法确认登录状态时按未登录处理（失败即拒绝），否则会绕过强制改密和管理员页面的拦截
         logger.error({ error: e }, 'Error processing token');
@@ -86,5 +111,27 @@ export const config = {
          * - sw.js、offline.html（Service Worker 与离线页，未登录时也要能加载）
          */
         "/((?!api|_next/static|_next/image|favicon.ico|icons/|manifest.webmanifest|sw.js|offline.html).*)",
+        "/api/error-items/:path*",
+        "/api/import/:path*",
+        "/api/analyze/:path*",
+        "/api/stats/:path*",
+        "/api/settings/:path*",
+        "/api/tags/:path*",
+        "/api/export/:path*",
+        "/api/notebooks/:path*",
+        "/api/practice/:path*",
+        "/api/admin/:path*",
+        "/api/ai/:path*",
+        "/api/analytics",
+        "/api/geogebra-analyze",
+        "/api/minimax-code/:path*",
+        "/api/openclaw/:path*",
+        "/api/paper-groups/:path*",
+        "/api/reanswer",
+        "/api/requests/:path*",
+        "/api/setup",
+        "/api/tasks/:path*",
+        "/api/tts/:path*",
+        "/api/student-submissions/:path*",
     ],
 };

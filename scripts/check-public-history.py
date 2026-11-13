@@ -10,7 +10,7 @@ PUBLIC_BASELINE = "9751f074f713f55add71174ebe4066641ad370f4"
 PRIVATE_PATHS = (
     ".gitea", "deploy", "tests/deployment", "doc/PORTAINER_DEPLOYMENT.md",
     "scripts/deploy.sh", "scripts/deploy_portainer.py", "scripts/prune-images.sh",
-    "config/app-config.json",
+    "config/app-config.json", "config/setup-token",
 )
 PRIVATE_NETWORKS = tuple(ipaddress.IPv4Network(value) for value in (
     (0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16),
@@ -19,6 +19,7 @@ EXAMPLE_ADDRESSES = {
     ".".join(("10", "0", "0", "1")): {
         "src/__tests__/unit/ai/ai-test-route.test.ts", "src/__tests__/unit/ai/models-route.test.ts",
         "src/__tests__/unit/rate-limit.test.ts",
+        "src/__tests__/integration/admin-telemetry-route.test.ts",
     },
     ".".join(("172", "30", "108", "211")): {"doc/setup-wsl-network.md"},
     ".".join(("192", "168", "1", "100")): {"doc/HTTPS_SETUP.md", "doc/setup-wsl-network.md", "docker-compose.https.yml"},
@@ -27,6 +28,7 @@ EXAMPLE_ADDRESSES = {
         "src/__tests__/integration/initialize.test.ts",
         "packaging/android/app/src/main/res/values/strings.xml",
         "packaging/android/app/src/main/res/values-zh/strings.xml",
+        "src/__tests__/integration/admin-telemetry-route.test.ts",
     },
 }
 IPV4 = re.compile(rb"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")

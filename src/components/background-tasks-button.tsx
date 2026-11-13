@@ -2,16 +2,27 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { CheckCircle2, ListTodo, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, ListTodo, Loader2, RefreshCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useTimeZone } from "@/contexts/TimeZoneContext";
 import { apiClient } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/date-time";
+import { toast } from "@/lib/feedback";
 import type { BackgroundTask } from "@/lib/background-tasks";
+
+interface RetryImportResponse {
+    retryImport?: {
+        parsedData: unknown;
+        imageBase64: string;
+        subjectId: string | null;
+        confirmBeforeImport: boolean;
+        returnPath: string;
+    };
+}
 
 /** 弹框打开时的刷新间隔；关闭时只低频刷新进行中的数量 */
 const OPEN_POLL_MS = 2000;
@@ -32,13 +43,16 @@ function formatElapsed(fromIso: string, toIso: string | null, now: number): stri
 export function BackgroundTasksButton() {
     const { t } = useLanguage();
     const { timeZone } = useTimeZone();
-    const { status } = useSession();
+    const { data: session, status } = useSession();
     const pathname = usePathname();
+    const router = useRouter();
     const [open, setOpen] = useState(false);
     const [tasks, setTasks] = useState<BackgroundTask[]>([]);
     const [now, setNow] = useState(() => Date.now());
+    const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null);
 
-    const hidden = status !== "authenticated" || HIDDEN_PATHS.some((pattern) => pattern.test(pathname || ""));
+    const hidden = status !== "authenticated" || session?.user?.role !== "admin"
+        || HIDDEN_PATHS.some((pattern) => pattern.test(pathname || ""));
 
     const refresh = useCallback(async () => {
         if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
@@ -78,6 +92,32 @@ export function BackgroundTasksButton() {
             setTasks(result.tasks);
         } catch {
             // 忽略，下次轮询会刷新
+        }
+    };
+
+    const retryTask = async (task: BackgroundTask) => {
+        if (!task.canRetry || retryingTaskId) return;
+        setRetryingTaskId(task.id);
+        try {
+            const result = await apiClient.post<RetryImportResponse>(`/api/tasks/${task.id}/retry`, {}, { timeout: 10 * 60 * 1000, recoverable: true });
+            if (result?.retryImport) {
+                try {
+                    sessionStorage.setItem("background-task-retry-import", JSON.stringify(result.retryImport));
+                } catch {
+                    toast.error(t.backgroundTasks.retryImportRestoreFailed);
+                    await refresh();
+                    return;
+                }
+                await refresh();
+                setOpen(false);
+                router.push(result.retryImport.returnPath || task.link || "/");
+                return;
+            }
+            await refresh();
+        } catch {
+            await refresh();
+        } finally {
+            setRetryingTaskId(null);
         }
     };
 
@@ -143,6 +183,18 @@ export function BackgroundTasksButton() {
                                                     <Link href={task.link} className="text-primary hover:underline" onClick={() => setOpen(false)}>
                                                         {t.backgroundTasks.view}
                                                     </Link>
+                                                )}
+                                                {task.status === "failed" && task.canRetry && (
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="h-7 gap-1 px-2 text-xs"
+                                                        onClick={() => retryTask(task)}
+                                                        disabled={retryingTaskId !== null}
+                                                    >
+                                                        <RefreshCw className={retryingTaskId === task.id ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+                                                        {retryingTaskId === task.id ? t.backgroundTasks.retrying : t.backgroundTasks.retry}
+                                                    </Button>
                                                 )}
                                             </div>
                                         </div>

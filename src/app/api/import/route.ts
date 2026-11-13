@@ -18,6 +18,7 @@ import { parseDifficultyStars } from "@/lib/ai/schema";
 import { resolveNotebookScope } from "@/lib/notebook-scope";
 import { sortTagsByParent } from "@/lib/tag-hierarchy";
 import { sanitizeFigureSvg } from "@/lib/figure-svg";
+import { parseImageFragments, serializeImageFragments } from "@/lib/image-fragments";
 import { normalizeFigureAlign, normalizeFigureScale } from "@/lib/figure-scale";
 import { normalizeCustomAnswerSpacePx } from "@/lib/exam-answer-space";
 import { sanitizeSvgAnimation } from "@/lib/svg-animation";
@@ -107,7 +108,9 @@ interface ImportData {
         paperLevel: string | null;
         difficultyStars?: number | null; // 旧版导出文件没有该字段
         hasFigure?: boolean;             // 旧版导出文件没有该字段
+        figureDescription?: string | null;
         figureSvg?: string | null;       // 旧版导出文件没有该字段
+        imageFragments?: string | null;  // 用户手动上传的原图配图列表
         figureScale?: number;           // 旧版备份缺省为 100%
         figureAlign?: string;           // 旧版备份缺省为居中
         answerSpacePx?: number | null;  // version 4 起导出，旧版备份缺省为按全局留白档位
@@ -191,6 +194,37 @@ interface ImportData {
         createdAt: string;
         updatedAt: string;
     }>;
+    /** 学生独立答题记录，version 6 起导出 */
+    studentSubmissions?: Array<{
+        id: string;
+        userId: string;
+        kind: string;
+        examPaperId: string | null;
+        status: string;
+        totalCount: number;
+        gradedCount: number;
+        correctCount: number;
+        createdAt: string;
+        completedAt: string | null;
+        answers: Array<{
+            id: string;
+            errorItemId: string | null;
+            examQuestionId: string | null;
+            questionText: string;
+            answerText: string;
+            analysis: string | null;
+            originalImageUrl: string | null;
+            figureSvg: string | null;
+            imageFragments: string | null;
+            userAnswer: string | null;
+            userAnswerImageUrl: string | null;
+            status: string;
+            isCorrect: boolean | null;
+            reason: string | null;
+            mistakeAnalysis: string | null;
+            createdAt: string;
+        }>;
+    }>;
     /** 动画讲解的云端语音（服务商、模型、音色、文字与 Base64 编码的 MP3），写入语音缓存 */
     ttsSpeeches?: unknown;
 }
@@ -232,6 +266,14 @@ function safeMasteryProbability(val: unknown): number | null {
 function safeLastPractice(raw: string | null | undefined): string | null {
     const practice = parseLastPractice(raw);
     return practice ? JSON.stringify(practice) : null;
+}
+
+function safeStudentAnswerImage(raw: unknown): string | null {
+    return typeof raw === 'string'
+        && raw.length <= 3_000_000
+        && /^data:image\/(?:png|jpe?g|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(raw)
+        ? raw
+        : null;
 }
 
 /** 试卷的错题本 ID 为 JSON 数组，导入时换成新 ID，找不到的去掉 */
@@ -302,6 +344,8 @@ export async function POST(req: Request) {
             examPapersCreated: 0,
             preferencesRestored: false,
             practiceRecordsCreated: 0,
+            studentSubmissionsCreated: 0,
+            studentAnswersCreated: 0,
             tagsLinked: 0,
             duplicateErrorItems: 0,
             ttsSpeechesImported: 0,
@@ -567,7 +611,12 @@ export async function POST(req: Request) {
                         paperLevel: resolvedPaperLevel,
                         difficultyStars,
                         hasFigure: item.hasFigure === true || sanitizeFigureSvg(item.figureSvg) !== null,
+                        figureDescription: typeof item.figureDescription === 'string' && item.figureDescription ? item.figureDescription : null,
                         figureSvg: sanitizeFigureSvg(item.figureSvg),
+                        imageFragments: (() => {
+                            const fragments = parseImageFragments(item.imageFragments);
+                            return fragments.length > 0 ? serializeImageFragments(fragments) : null;
+                        })(),
                         figureScale: normalizeFigureScale(item.figureScale),
                         figureAlign: normalizeFigureAlign(item.figureAlign),
                         answerSpacePx: normalizeCustomAnswerSpacePx(item.answerSpacePx),
@@ -650,6 +699,7 @@ export async function POST(req: Request) {
             }
 
             // 6. 导入试卷：同一用户下标题和创建时间都相同视为已导入过，只建立题目映射
+            const examPaperIdMap = new Map<string, string>();
             const examQuestionIdMap = new Map<string, string>();
             const examQuestionOwnerMap = new Map<string, string>();
             for (const paper of (body.examPapers || [])) {
@@ -658,9 +708,10 @@ export async function POST(req: Request) {
                 const createdAt = safeParseDate(paper.createdAt);
                 const existing = createdAt && await tx.examPaper.findFirst({
                     where: { userId: targetUserId, title: paper.title, createdAt },
-                    select: { questions: { select: { id: true, order: true } } },
+                    select: { id: true, questions: { select: { id: true, order: true } } },
                 });
                 if (existing) {
+                    examPaperIdMap.set(paper.id, existing.id);
                     for (const question of questions) {
                         const matched = existing.questions.find((candidate) => candidate.order === question.order);
                         if (matched) {
@@ -688,6 +739,7 @@ export async function POST(req: Request) {
                         updatedAt: safeParseDate(paper.updatedAt),
                     },
                 });
+                examPaperIdMap.set(paper.id, created.id);
                 for (const [index, question] of questions.entries()) {
                     const errorItemId = question.errorItemId && errorItemOwnerMap.get(question.errorItemId) === targetUserId
                         ? errorItemIdMap.get(question.errorItemId) : undefined;
@@ -748,7 +800,116 @@ export async function POST(req: Request) {
                 if (errorItemId && result && !evaluatedIds.has(errorItemId)) masteryIds.add(errorItemId);
             }
 
-            // 8. 还原了已掌握阈值时，按新阈值同步该账户全部错题的 masteryLevel
+            // 8. 导入学生独立答题记录；不写入管理员 PracticeRecord，且只重新连接本次导入的数据。
+            for (const submission of (body.studentSubmissions || [])) {
+                const targetUserId = importAll ? submission.userId : user.id;
+                let mappedExamPaperId = submission.examPaperId && examPaperIdMap.has(submission.examPaperId)
+                    ? examPaperIdMap.get(submission.examPaperId)!
+                    : null;
+                if (submission.examPaperId && !mappedExamPaperId) {
+                    const existingPaper = await tx.examPaper.findFirst({
+                        where: { id: submission.examPaperId, userId: targetUserId },
+                        select: { id: true },
+                    });
+                    mappedExamPaperId = existingPaper?.id ?? null;
+                }
+                const createdAt = safeParseDate(submission.createdAt);
+                const answers = Array.isArray(submission.answers) ? submission.answers : [];
+                const existingById = submission.id ? await tx.studentSubmission.findUnique({
+                    where: { id: submission.id },
+                    select: { id: true, userId: true },
+                }) : null;
+                if (existingById?.userId === targetUserId) continue;
+                const existing = createdAt && existingById ? await tx.studentSubmission.findFirst({
+                    where: {
+                        userId: targetUserId,
+                        kind: submission.kind === 'exam' ? 'exam' : 'review',
+                        examPaperId: mappedExamPaperId,
+                        createdAt,
+                    },
+                    select: { id: true },
+                }) : null;
+                if (existing) {
+                    continue;
+                }
+
+                const answerSnapshots = answers.map((answer) => ({
+                    ...answer,
+                    status: ['pending', 'grading', 'graded', 'failed'].includes(answer.status) ? answer.status : 'failed',
+                    isCorrect: answer.status === 'graded' && typeof answer.isCorrect === 'boolean' ? answer.isCorrect : null,
+                }));
+                const gradedAnswers = answerSnapshots.filter((answer) => answer.status === 'graded');
+                const allAnswersGraded = answerSnapshots.length > 0 && gradedAnswers.length === answerSnapshots.length;
+                const status = allAnswersGraded ? 'completed' : submission.status === 'grading' ? 'grading' : 'failed';
+                const created = await tx.studentSubmission.create({
+                    data: {
+                        ...(!existingById ? { id: submission.id } : {}),
+                        userId: targetUserId,
+                        kind: submission.kind === 'exam' ? 'exam' : 'review',
+                        examPaperId: mappedExamPaperId,
+                        status,
+                        totalCount: Number.isInteger(submission.totalCount) && submission.totalCount >= 0 ? submission.totalCount : answerSnapshots.length,
+                        gradedCount: gradedAnswers.length,
+                        correctCount: gradedAnswers.filter((answer) => answer.isCorrect).length,
+                        createdAt,
+                        completedAt: safeParseDate(submission.completedAt),
+                    },
+                    select: { id: true },
+                });
+                stats.studentSubmissionsCreated++;
+
+                for (const answer of answerSnapshots) {
+                    let errorItemId = answer.errorItemId && errorItemOwnerMap.get(answer.errorItemId) === targetUserId
+                        ? errorItemIdMap.get(answer.errorItemId) : undefined;
+                    if (answer.errorItemId && !errorItemId) {
+                        const sharedItem = await tx.errorItem.findFirst({
+                            where: { id: answer.errorItemId, user: { role: 'admin', isActive: true } },
+                            select: { id: true },
+                        });
+                        errorItemId = sharedItem?.id;
+                    }
+                    let examQuestionId = answer.examQuestionId && examQuestionOwnerMap.get(answer.examQuestionId) === targetUserId
+                        ? examQuestionIdMap.get(answer.examQuestionId) : undefined;
+                    if (answer.examQuestionId && !examQuestionId) {
+                        const existingQuestion = await tx.examQuestion.findFirst({
+                            where: { id: answer.examQuestionId, paper: { userId: targetUserId } },
+                            select: { id: true },
+                        });
+                        examQuestionId = existingQuestion?.id;
+                    }
+                    const existingAnswer = answer.id ? await tx.studentAnswer.findUnique({
+                        where: { id: answer.id },
+                        select: { id: true },
+                    }) : null;
+                    await tx.studentAnswer.create({
+                        data: {
+                            ...(!existingAnswer ? { id: answer.id } : {}),
+                            submissionId: created.id,
+                            errorItemId,
+                            examQuestionId,
+                            questionText: String(answer.questionText || ''),
+                            answerText: String(answer.answerText || ''),
+                            analysis: answer.analysis,
+                            originalImageUrl: answer.originalImageUrl,
+                            figureSvg: sanitizeFigureSvg(answer.figureSvg),
+                            imageFragments: (() => {
+                                const fragments = parseImageFragments(answer.imageFragments);
+                                return fragments.length > 0 ? serializeImageFragments(fragments) : null;
+                            })(),
+                            userAnswer: answer.userAnswer,
+                            userAnswerImageUrl: safeStudentAnswerImage(answer.userAnswerImageUrl),
+                            status: answer.status,
+                            isCorrect: answer.isCorrect,
+                            reason: answer.reason,
+                            mistakeAnalysis: answer.mistakeAnalysis,
+                            createdAt: safeParseDate(answer.createdAt),
+                        },
+                    });
+                    stats.studentAnswersCreated++;
+                }
+            }
+
+            // 9. 还原了已掌握阈值时，按新阈值同步该账户全部错题的 masteryLevel
             if (typeof preferences.masteryThreshold === 'number') {
                 await syncMasteryLevels(tx, user.id, preferences.masteryThreshold);
             }

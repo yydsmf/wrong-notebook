@@ -1,11 +1,13 @@
 "use client";
 
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { QuestionTextRenderer } from "@/components/question-text-renderer";
 import { AnswerSpaceControl } from "@/components/print-preview/answer-space-control";
 import { QuestionFigure } from "@/components/question-figure";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { resolveQuestionAnswerSpacePx } from "@/lib/exam-answer-space";
 import { getPrintableItemTagNames } from "@/lib/print-preview";
+import { parseImageFragments } from "@/lib/image-fragments";
 import { usePaperGroups } from "@/lib/use-paper-groups";
 import type { PrintableErrorItem } from "@/types/api";
 import type { PrintDisplayOptions } from "./print-options";
@@ -72,9 +74,9 @@ export function PrintableQuestion({
 
             {options.showQuestionText && item.questionText ? (
                 <div className="mb-4">
-                    <MarkdownRenderer content={item.questionText} />
-                    {/* 有 SVG 配图时打印配图，不再打印拍照原图 */}
-                    <QuestionFigure svg={item.figureSvg} scale={item.figureScale} align={item.figureAlign} />
+                    <QuestionTextRenderer content={item.questionText} />
+                    {/* 优先打印用户手动裁剪的原图配图，旧数据再回退到 SVG。 */}
+                    <QuestionFigure svg={item.figureSvg} images={parseImageFragments(item.imageFragments)} scale={item.figureScale} align={item.figureAlign} />
                 </div>
             ) : (
                 item.originalImageUrl && (

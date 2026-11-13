@@ -21,6 +21,22 @@ describe('题目配图', () => {
         expect(render(null)).toBe('');
     });
 
+    it('优先按顺序显示手动上传的多张配图', () => {
+        const markup = renderToStaticMarkup(
+            <LanguageProvider>
+                <QuestionFigure
+                    svg='<svg viewBox="0 0 10 10" />'
+                    images={[
+                        { id: 'first', imageUrl: 'data:image/png;base64,first', order: 0 },
+                        { id: 'second', imageUrl: 'data:image/png;base64,second', order: 1 },
+                    ]}
+                />
+            </LanguageProvider>,
+        );
+        expect(markup.indexOf('base64,first')).toBeLessThan(markup.indexOf('base64,second'));
+        expect(markup).not.toContain('data:image/svg+xml');
+    });
+
     it('旧题默认使用 100%，缩放同时影响图片大小和布局占位', () => {
         const svg = '<svg viewBox="0 0 200 100"/>';
         const markup = (scale?: number, align?: string) => renderToStaticMarkup(<LanguageProvider><QuestionFigure svg={svg} scale={scale} align={align} /></LanguageProvider>);

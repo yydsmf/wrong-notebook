@@ -1,4 +1,5 @@
 import { AzureOpenAI } from "openai";
+import type { ChatCompletion, ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import type { AIService, GradeLevel, ParsedQuestion, DifficultyLevel, ReanswerQuestionResult, GeogebraAnalysisResult, MasteryEvaluationInput, MasteryEvaluationResult, AnswerGradingInput, AnswerGradingResult, TagSuggestionInput, TagSuggestionResult, CandidateTags, FigureResult } from "./types";
 import { generateGradeRecognitionRequest, generateAnalyzeRequest, generateSimilarQuestionRequest, generateReanswerRequest, generateGeogebraRequest, generateMasteryRequest, generateGradingRequest, generateTagSuggestRequest, generateFigureRequest, generateSvgAnimationRequest, generateSvgNarrationRequest, generateLatexFixRequest } from './prompt-requests';
 import { parseNarration, sanitizeSvgAnimation } from '../svg-animation';
@@ -17,6 +18,9 @@ import { normalizeAiQuestionTags } from './knowledge-points';
 
 const logger = createLogger('ai:azure');
 
+/** Azure OpenAI 的所有生成请求统一使用高推理强度；返回 usage 时记录实际推理 token。 */
+const GLOBAL_REASONING_EFFORT = 'high' as const;
+
 type AzureUserContent = string | Array<
     { type: "text"; text: string } |
     { type: "image_url"; image_url: { url: string } }
@@ -34,6 +38,25 @@ export interface AzureConfig {
 export class AzureOpenAIProvider implements AIService {
     private client: AzureOpenAI;
     private model: string;
+
+    private async createChatCompletion(params: ChatCompletionCreateParamsNonStreaming): Promise<ChatCompletion> {
+        const response = await this.client.chat.completions.create({
+            ...params,
+            reasoning_effort: GLOBAL_REASONING_EFFORT,
+        });
+        const usage = response.usage as (typeof response.usage & {
+            completion_tokens_details?: { reasoning_tokens?: number | null } | null;
+        }) | undefined;
+        logger.info({
+            model: this.model,
+            requestedReasoningEffort: GLOBAL_REASONING_EFFORT,
+            promptTokens: usage?.prompt_tokens,
+            completionTokens: usage?.completion_tokens,
+            totalTokens: usage?.total_tokens,
+            reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens ?? null,
+        }, 'AI generation usage');
+        return response;
+    }
     private deployment: string;
     private endpoint: string;
 
@@ -88,7 +111,7 @@ export class AzureOpenAIProvider implements AIService {
         return cleaned.substring(startIndex + startTag.length, endIndex).trim();
     }
 
-    private parseResponse(text: string): ParsedQuestion {
+    private parseResponse(text: string, includeFigureSvg = false): ParsedQuestion {
         logger.debug({ textLength: text.length }, 'Parsing AI response');
 
         const questionText = this.extractTag(text, "question_text");
@@ -97,6 +120,7 @@ export class AzureOpenAIProvider implements AIService {
         const subjectRaw = this.extractTag(text, "subject");
         const knowledgePointsRaw = this.extractTag(text, "knowledge_points");
         const requiresImageRaw = this.extractTag(text, "requires_image");
+        const figureDescription = this.extractTag(text, "figure_description") || null;
         const wrongAnswerText = this.extractTag(text, "wrong_answer_text") || "";
         const mistakeAnalysis = this.extractTag(text, "mistake_analysis") || "";
         const mistakeStatusRaw = this.extractTag(text, "mistake_status");
@@ -135,9 +159,12 @@ export class AzureOpenAIProvider implements AIService {
             subject,
             knowledgePoints,
             requiresImage,
+            figureDescription,
             gradeSemester: parseRecognizedGrade(this.extractTag(text, "grade_semester")),
             difficultyStars: parseDifficultyStars(this.extractTag(text, "difficulty_stars")),
-            ...parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg")),
+            ...(includeFigureSvg
+                ? parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"))
+                : parseFigure(this.extractTag(text, "has_figure"), null)),
         };
 
         // Final Schema Validation
@@ -182,7 +209,7 @@ export class AzureOpenAIProvider implements AIService {
         logger.box('📝 Full System Prompt', systemPrompt.system);
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     {
@@ -263,7 +290,7 @@ export class AzureOpenAIProvider implements AIService {
         logger.box('📝 User Prompt', userPrompt);
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     {
@@ -289,7 +316,7 @@ export class AzureOpenAIProvider implements AIService {
             logger.box('🤖 AI Raw Response', text);
 
             if (!text) throw new Error("Empty response from AI");
-            const parsedResult = this.parseResponse(text);
+            const parsedResult = this.parseResponse(text, true);
 
             logger.box('✅ Parsed & Validated Result', JSON.stringify(parsedResult, null, 2));
 
@@ -341,7 +368,7 @@ export class AzureOpenAIProvider implements AIService {
                 logger.debug({ imageBase64Type: typeof imageBase64, hasValue: !!imageBase64 }, 'No image data');
             }
 
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },
@@ -398,7 +425,7 @@ export class AzureOpenAIProvider implements AIService {
         }, 'GeoGebra Analysis Request');
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },
@@ -449,7 +476,7 @@ export class AzureOpenAIProvider implements AIService {
         }, 'Mastery Evaluation Request');
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },
@@ -473,7 +500,7 @@ export class AzureOpenAIProvider implements AIService {
     async recognizeGrade(questionText: string): Promise<string | null> {
         const prompt = generateGradeRecognitionRequest(questionText);
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }],
                 max_tokens: maxTokens,
@@ -491,11 +518,18 @@ export class AzureOpenAIProvider implements AIService {
         logger.info({ provider: 'Azure OpenAI' }, 'Answer Grading Request');
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },
-                    { role: "user", content: prompt.user }
+                    { role: "user", content: input.userAnswerImage
+                        ? [
+                            { type: 'text', text: prompt.user },
+                            { type: 'image_url', image_url: { url: input.userAnswerImage.base64.startsWith('data:')
+                                ? input.userAnswerImage.base64
+                                : `data:${input.userAnswerImage.mimeType};base64,${input.userAnswerImage.base64}` } },
+                        ]
+                        : prompt.user }
                 ],
                 max_tokens: maxTokens,
             }), 4096, () => logger.warn('Output truncated by reasoning, retrying with larger max_tokens'), this.model);
@@ -522,7 +556,7 @@ export class AzureOpenAIProvider implements AIService {
         }, 'Tag Suggestion Request');
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },
@@ -548,7 +582,7 @@ export class AzureOpenAIProvider implements AIService {
         logger.info({ provider: 'Azure OpenAI', deployment: this.deployment, imageSize: imageBase64.length }, 'Figure SVG Request');
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },
@@ -574,7 +608,7 @@ export class AzureOpenAIProvider implements AIService {
         logger.info({ provider: 'Azure OpenAI', deployment: this.deployment, fields: Object.keys(input) }, 'LaTeX Fix Request');
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },
@@ -600,7 +634,7 @@ export class AzureOpenAIProvider implements AIService {
         logger.info({ provider: 'Azure OpenAI', deployment: this.deployment, questionLength: questionText.length }, 'SVG Animation Request');
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },
@@ -626,7 +660,7 @@ export class AzureOpenAIProvider implements AIService {
         logger.info({ provider: 'Azure OpenAI', deployment: this.deployment, svgLength: svgAnimation.length }, 'SVG Narration Request');
 
         try {
-            const response = await withTruncationRetry((maxTokens) => this.client.chat.completions.create({
+            const response = await withTruncationRetry((maxTokens) => this.createChatCompletion({
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },

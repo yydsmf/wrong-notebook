@@ -6,6 +6,17 @@
 
 **简体中文** | [English](README.en.md)
 
+## 当前定制版本
+
+本仓库是 [margrop/wrong-notebook](https://github.com/margrop/wrong-notebook) 的家庭学习定制版，发布与问题反馈使用 [yydsmf/wrong-notebook](https://github.com/yydsmf/wrong-notebook)。下方保留的上游徽章、演示与功能介绍用于说明项目来源。
+
+- 管理员维护题库和试卷；普通用户共享管理员完整题库及试卷，独立保存答题结果和复习进度。
+- 用户端只保留复习与试卷答题入口，支持选择题、判断题和手写答案上传；提交后进行 AI 批改并展示错因分析。
+- 拍照录入支持裁剪前手动旋转，强调原题文字、单位和公式保真转录；上传识题时停用 SVG 配图生成，导入后可多次裁剪并上传原图配图。
+- 后台 AI 调用采用流式接收并提供阶段进度；失败任务可以重试，增强下划线、分数填空等题面显示兼容性。
+
+首个预览版保留上游完整提交历史，应用代码采用本地当前定制版本的完整快照，上游后续重构的功能需另行合并与验证。日期标签、验证步骤和可选安装包发布配置见 [版本发布指南](doc/release-guide.md)。npm 包发布与已签名 Android 安装包默认关闭，配置自己的发布权限及签名后再启用。
+
 [![GitHub downloads](https://img.shields.io/github/downloads/margrop/wrong-notebook/total?label=downloads&logo=github)](https://github.com/margrop/wrong-notebook/releases) [![npm downloads](https://img.shields.io/npm/d18m/wrong-notebook?label=npm%20downloads&logo=npm)](https://www.npmjs.com/package/wrong-notebook) [![GitHub stars](https://img.shields.io/github/stars/margrop/wrong-notebook?logo=github)](https://github.com/margrop/wrong-notebook/stargazers) [![GitHub forks](https://img.shields.io/github/forks/margrop/wrong-notebook?logo=github)](https://github.com/margrop/wrong-notebook/forks)
 
 [![桌面版](https://img.shields.io/badge/%E6%A1%8C%E9%9D%A2%E7%89%88-Windows%20%7C%20macOS%20%7C%20Linux-informational)](https://github.com/margrop/wrong-notebook/releases) [![Android](https://img.shields.io/badge/Android-34A853?logo=android&logoColor=white)](https://github.com/margrop/wrong-notebook/releases) [![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://github.com/margrop/wrong-notebook/pkgs/container/wrong-notebook) [![npm](https://img.shields.io/badge/npm-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/wrong-notebook) [![飞牛OS](https://img.shields.io/badge/%E9%A3%9E%E7%89%9BOS-fpk-0A84FF)](https://github.com/margrop/wrong-notebook/releases) [![Web](https://img.shields.io/badge/Web-PC%20%7C%20Mobile-orange)](https://wrong-notebook-demo.margrop.net)

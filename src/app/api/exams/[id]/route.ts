@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { getStudentAnswerOptions } from "@/lib/student-answers";
+import { parseImageFragments } from "@/lib/image-fragments";
+import { getExactSourceImageFragments } from "@/lib/exam-images";
+import { getStudentVisibleExamOwnerIds } from "@/lib/shared-exams";
 import { getCurrentUser } from "@/lib/current-user";
 import { unauthorized, notFound, validationError, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
@@ -43,15 +47,19 @@ export async function GET(
                 questions: {
                     orderBy: { order: 'asc' },
                     include: {
-                        errorItem: { select: { id: true, subject: { select: { name: true } } } },
+                        errorItem: { select: { id: true, questionText: true, imageFragments: true, subject: { select: { name: true } } } },
                         practiceRecords: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { id: true, result: true, createdAt: true } },
                     },
                 },
             },
         });
-        if (!paper || paper.userId !== user.id) {
+        if (!paper) {
             return notFound("Exam paper not found");
         }
+        const visibleOwnerIds = user.role === 'admin'
+            ? [user.id]
+            : await getStudentVisibleExamOwnerIds(user.id);
+        if (!visibleOwnerIds.includes(paper.userId)) return notFound("Exam paper not found");
 
         // 服务重启会中断后台生成，查看时自动续上
         if (paper.status === 'generating' && !isPaperGenerating(paper.id)) {
@@ -59,10 +67,34 @@ export async function GET(
         }
 
         const { userId: _userId, questions, ...rest } = paper;
+        if (user.role !== 'admin') {
+            return NextResponse.json({
+                ...rest,
+                questions: questions.map(({ errorItem, practiceRecords: _attempts, answerText: _answerText, analysis: _analysis, ...question }) => ({
+                    ...question,
+                    figureScale: normalizeFigureScale(question.figureScale),
+                    figureAlign: normalizeFigureAlign(question.figureAlign),
+                    answerSpacePx: normalizeCustomAnswerSpacePx(question.answerSpacePx),
+                    notebookName: errorItem?.subject?.name ?? null,
+                    imageFragments: parseImageFragments(getExactSourceImageFragments(
+                        question.questionText,
+                        errorItem?.questionText,
+                        errorItem?.imageFragments,
+                    )),
+                    ...getStudentAnswerOptions(question.questionText || ""),
+                    attempts: [],
+                })),
+            });
+        }
         return NextResponse.json({
             ...rest,
             questions: questions.map(({ errorItem, practiceRecords, ...question }) => ({
                 ...question,
+                imageFragments: parseImageFragments(getExactSourceImageFragments(
+                    question.questionText,
+                    errorItem?.questionText,
+                    errorItem?.imageFragments,
+                )),
                 figureScale: normalizeFigureScale(question.figureScale),
                 figureAlign: normalizeFigureAlign(question.figureAlign),
                 answerSpacePx: normalizeCustomAnswerSpacePx(question.answerSpacePx),
@@ -91,6 +123,7 @@ export async function PATCH(
         if (!user) {
             return unauthorized("Authentication required");
         }
+        if (user.role !== 'admin') return notFound("Exam paper not found");
 
         const parsed = updateFigureSchema.safeParse(await req.json().catch(() => ({})));
         if (!parsed.success) {
@@ -147,6 +180,7 @@ export async function DELETE(
         if (!user) {
             return unauthorized("Authentication required");
         }
+        if (user.role !== 'admin') return notFound("Exam paper not found");
 
         const paper = await prisma.examPaper.findUnique({ where: { id }, select: { userId: true } });
         if (!paper || paper.userId !== user.id) {

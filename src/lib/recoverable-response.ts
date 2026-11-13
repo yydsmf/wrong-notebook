@@ -8,6 +8,7 @@
  * 只保存在当前进程内存中（生产环境为单个容器），服务重启后清空；请求编号由前端随机生成，只有发起请求的页面知道。
  */
 import { createLogger } from "@/lib/logger";
+import type { RequestProgress } from "@/lib/request-progress";
 
 const logger = createLogger('recoverable-response');
 
@@ -24,7 +25,7 @@ const MAX_BODY_LENGTH = 5_000_000;
 const REQUEST_ID_PATTERN = /^[a-f0-9]{32}$/;
 
 export type StoredResponse =
-    | { state: 'running' }
+    | { state: 'running'; progress: RequestProgress }
     | { state: 'done'; status: number; body: unknown };
 
 interface Entry {
@@ -32,6 +33,7 @@ interface Entry {
     finishedAt: number | null;
     status: number;
     body: unknown;
+    progress: RequestProgress;
 }
 
 const store = globalThis as typeof globalThis & { __recoverableResponses?: Map<string, Entry> };
@@ -75,7 +77,13 @@ export function withRecoverableResponse<R extends Request, A extends unknown[]>(
 
         const now = Date.now();
         prune(now);
-        const entry: Entry = { startedAt: now, finishedAt: null, status: 0, body: null };
+        const entry: Entry = {
+            startedAt: now,
+            finishedAt: null,
+            status: 0,
+            body: null,
+            progress: { stage: 'requesting', percent: 10 },
+        };
         entries.set(id, entry);
         try {
             const response = await handler(req, ...args);
@@ -100,7 +108,25 @@ export function getStoredResponse(id: string): StoredResponse | null {
     prune(Date.now());
     const entry = entries.get(id);
     if (!entry) return null;
-    return entry.finishedAt === null ? { state: 'running' } : { state: 'done', status: entry.status, body: entry.body };
+    return entry.finishedAt === null
+        ? { state: 'running', progress: { ...entry.progress } }
+        : { state: 'done', status: entry.status, body: entry.body };
+}
+
+/** 更新进行中请求的阶段；请求完成后忽略迟到的进度事件。 */
+export function updateStoredResponseProgress(id: string | null | undefined, progress: RequestProgress): void {
+    if (!id) return;
+    const entry = entries.get(id);
+    if (!entry || entry.finishedAt !== null) return;
+    entry.progress = {
+        stage: progress.stage,
+        percent: Math.max(0, Math.min(100, Math.round(progress.percent))),
+    };
+}
+
+/** 从 Request 头部读取请求编号并更新进度。 */
+export function updateStoredResponseProgressFromRequest(req: Request, progress: RequestProgress): void {
+    updateStoredResponseProgress(parseRequestId(req.headers.get(REQUEST_ID_HEADER)), progress);
 }
 
 /** 仅供测试：清空暂存 */

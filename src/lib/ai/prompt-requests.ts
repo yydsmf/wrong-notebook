@@ -71,10 +71,11 @@ export function generateGradeRecognitionRequest(questionText: string): PromptReq
 }
 
 export function generateGradingRequest(input: AnswerGradingInput): PromptRequest {
+    const { userAnswerImage, ...textInput } = input;
     return createPromptRequest(generateGradingPrompt({
         questionText: ref('questionText'), answerText: ref('answerText'), analysis: ref('analysis'),
-        userAnswer: ref('userAnswer'), language: input.language,
-    }), { ...input });
+        userAnswer: ref('userAnswer'), hasImageAnswer: Boolean(userAnswerImage), language: input.language,
+    }), { ...textInput, hasImageAnswer: Boolean(userAnswerImage) });
 }
 
 export function generateMasteryRequest(input: MasteryEvaluationInput): PromptRequest {

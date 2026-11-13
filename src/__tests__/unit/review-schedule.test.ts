@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REVIEW_INTERVALS, getReviewPlan, isReviewDue } from '@/lib/review-schedule';
+import { REVIEW_INTERVALS, getReviewPlan, getStudentReviewPlan, isReviewDue } from '@/lib/review-schedule';
 
 const TZ = 'Asia/Shanghai';
 // 北京时间 2026-10-01 20:00
@@ -66,5 +66,23 @@ describe('isReviewDue', () => {
 
     it('已完成的计划不会到期', () => {
         expect(isReviewDue({ stage: 6, nextReviewAt: null }, TZ)).toBe(false);
+    });
+});
+
+describe('getStudentReviewPlan', () => {
+    it('学生首次录入当天可复习，答错当天可重做，答对按 1、3、7、14 天推进', () => {
+        expect(getStudentReviewPlan(created, [], TZ).nextReviewAt?.toISOString()).toBe('2026-09-30T16:00:00.000Z');
+        expect(getStudentReviewPlan(created, [{ result: 'wrong', createdAt: at('2026-10-05T02:00:00Z') }], TZ).nextReviewAt?.toISOString()).toBe('2026-10-04T16:00:00.000Z');
+        expect(getStudentReviewPlan(created, [{ result: 'correct', createdAt: at('2026-10-05T02:00:00Z') }], TZ).nextReviewAt?.toISOString()).toBe('2026-10-05T16:00:00.000Z');
+        expect(getStudentReviewPlan(created, [
+            { result: 'correct', createdAt: at('2026-10-05T02:00:00Z') },
+            { result: 'correct', createdAt: at('2026-10-06T02:00:00Z') },
+        ], TZ).nextReviewAt?.toISOString()).toBe('2026-10-08T16:00:00.000Z');
+        expect(getStudentReviewPlan(created, [
+            { result: 'correct', createdAt: at('2026-10-02T02:00:00Z') },
+            { result: 'correct', createdAt: at('2026-10-03T02:00:00Z') },
+            { result: 'correct', createdAt: at('2026-10-06T02:00:00Z') },
+            { result: 'correct', createdAt: at('2026-10-13T02:00:00Z') },
+        ], TZ).nextReviewAt?.toISOString()).toBe('2026-10-26T16:00:00.000Z');
     });
 });

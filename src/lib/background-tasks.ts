@@ -8,6 +8,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger('background-tasks');
@@ -39,6 +40,7 @@ export interface BackgroundTask {
     /** 批量事务的进度 */
     progress: { done: number; total: number; failed: number } | null;
     error: string | null;
+    canRetry: boolean;
     /** 可跳转查看的页面 */
     link: string | null;
     startedAt: string;
@@ -47,6 +49,13 @@ export interface BackgroundTask {
 
 interface StoredTask extends BackgroundTask {
     userId: string;
+    retryRequest?: BackgroundTaskRetryRequest;
+}
+
+export interface BackgroundTaskRetryRequest {
+    path: string;
+    body?: unknown;
+    timeoutMs?: number;
 }
 
 export interface BackgroundTaskInput {
@@ -55,6 +64,7 @@ export interface BackgroundTaskInput {
     subject?: string | null;
     link?: string | null;
     total?: number;
+    retryRequest?: BackgroundTaskRetryRequest;
 }
 
 export interface BackgroundTaskHandle {
@@ -62,6 +72,39 @@ export interface BackgroundTaskHandle {
     setProgress: (done: number, total?: number, failed?: number) => void;
     succeed: () => void;
     fail: (error: unknown) => void;
+}
+
+/** Header used when the retry endpoint replays an already registered task. */
+export const BACKGROUND_TASK_REPLAY_HEADER = 'x-background-task-replay';
+export const BACKGROUND_TASK_REPLAY_ID_HEADER = 'x-background-task-replay-id';
+const replayTokenStore = globalThis as typeof globalThis & { __backgroundTaskReplayToken?: string };
+export const BACKGROUND_TASK_REPLAY_TOKEN = replayTokenStore.__backgroundTaskReplayToken ??= randomUUID();
+
+export function isBackgroundTaskReplay(req: Request): boolean {
+    return req.headers.get(BACKGROUND_TASK_REPLAY_HEADER) === BACKGROUND_TASK_REPLAY_TOKEN;
+}
+
+/** Replay the original operation against the claimed task without registering a duplicate task. */
+export function trackBackgroundTaskForRequest<T>(
+    req: Request,
+    input: BackgroundTaskInput,
+    operation: (task: BackgroundTaskHandle) => Promise<T>,
+): Promise<T> {
+    if (!isBackgroundTaskReplay(req)) return trackBackgroundTask(input, operation);
+    const taskId = req.headers.get(BACKGROUND_TASK_REPLAY_ID_HEADER);
+    const existing = taskId ? tasks.get(taskId) : undefined;
+    if (existing?.userId === input.userId && existing.status === 'running') {
+        return operation({
+            id: existing.id,
+            setProgress: (done, total, failed) => {
+                existing.progress = { done, total: total ?? existing.progress?.total ?? done, failed: failed ?? existing.progress?.failed ?? 0 };
+                scheduleSave();
+            },
+            succeed: () => undefined,
+            fail: () => undefined,
+        });
+    }
+    return operation({ id: `replay-${Date.now().toString(36)}`, setProgress: () => undefined, succeed: () => undefined, fail: () => undefined });
 }
 
 /** 已结束的事务保留时长 */
@@ -107,7 +150,7 @@ function ensureLoaded() {
     if (!file) return;
     let saved: unknown;
     try {
-        saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+        saved = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ file, 'utf8'));
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') logger.warn({ error }, 'Failed to read saved background tasks');
         return;
@@ -139,7 +182,8 @@ function saveNow() {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         // 先写临时文件再改名，避免写到一半时进程退出留下损坏的文件
         const temp = `${file}.${process.pid}.tmp`;
-        fs.writeFileSync(temp, JSON.stringify([...tasks.values()]));
+        // Retry inputs can contain the original image or long prompts; keep them in memory only.
+        fs.writeFileSync(temp, JSON.stringify([...tasks.values()].map(({ retryRequest: _retryRequest, ...saved }) => saved)));
         fs.renameSync(temp, file);
     } catch (error) {
         logger.warn({ error }, 'Failed to save background tasks');
@@ -184,7 +228,9 @@ export function startBackgroundTask(input: BackgroundTaskInput): BackgroundTaskH
         status: 'running',
         progress: input.total !== undefined ? { done: 0, total: input.total, failed: 0 } : null,
         error: null,
+        canRetry: !!input.retryRequest,
         link: input.link ?? null,
+        retryRequest: input.retryRequest,
         startedAt: new Date(now).toISOString(),
         finishedAt: null,
     };
@@ -196,6 +242,10 @@ export function startBackgroundTask(input: BackgroundTaskInput): BackgroundTaskH
         task.status = status;
         task.error = error;
         task.finishedAt = new Date().toISOString();
+        if (status !== 'failed') {
+            task.canRetry = false;
+            delete task.retryRequest;
+        }
         scheduleSave();
     };
     return {
@@ -245,10 +295,64 @@ export function listBackgroundTasks(userId: string): BackgroundTask[] {
         status: task.status,
         progress: task.progress && { ...task.progress },
         error: task.error,
+        canRetry: task.status === 'failed' && !!task.retryRequest,
         link: task.link,
         startedAt: task.startedAt,
         finishedAt: task.finishedAt,
     }));
+}
+
+/** Only the owning user can inspect and replay a failed task's request. */
+export function getBackgroundTaskRetry(userId: string, taskId: string): BackgroundTaskRetryRequest | null {
+    prune(Date.now());
+    const task = tasks.get(taskId);
+    if (!task || task.userId !== userId || task.status !== 'failed' || !task.retryRequest) return null;
+    return task.retryRequest;
+}
+
+/** Atomically claim a failed task so two tabs cannot launch the same retry at once. */
+export function beginBackgroundTaskRetry(userId: string, taskId: string): BackgroundTaskRetryRequest | null {
+    const retryRequest = getBackgroundTaskRetry(userId, taskId);
+    if (!retryRequest) return null;
+    const task = tasks.get(taskId)!;
+    task.status = 'running';
+    task.error = null;
+    task.finishedAt = null;
+    if (task.progress) task.progress = { ...task.progress, done: 0, failed: 0 };
+    scheduleSave();
+    return retryRequest;
+}
+
+/** Finish a claimed retry, retaining failures for another attempt. */
+export function finishBackgroundTaskRetry(userId: string, taskId: string, error?: unknown): boolean {
+    ensureLoaded();
+    const task = tasks.get(taskId);
+    if (!task || task.userId !== userId || task.status !== 'running' || !task.retryRequest) return false;
+    task.status = 'failed';
+    task.error = errorMessage(error ?? 'RETRY_FAILED');
+    task.finishedAt = new Date().toISOString();
+    scheduleSave();
+    return true;
+}
+
+/** Remove the original task after its retry has completed successfully. */
+export function completeBackgroundTaskRetry(userId: string, taskId: string): boolean {
+    ensureLoaded();
+    const task = tasks.get(taskId);
+    if (!task || task.userId !== userId || task.status !== 'running' || !task.retryRequest) return false;
+    tasks.delete(taskId);
+    scheduleSave();
+    return true;
+}
+
+/** Remove one finished task after its replay succeeds. */
+export function removeBackgroundTask(userId: string, taskId: string): boolean {
+    ensureLoaded();
+    const task = tasks.get(taskId);
+    if (!task || task.userId !== userId || task.status === 'running') return false;
+    tasks.delete(taskId);
+    scheduleSave();
+    return true;
 }
 
 /** 清除当前用户已结束的事务记录 */
