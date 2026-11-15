@@ -107,6 +107,31 @@ describe('AI Prompts', () => {
             }
         });
 
+        it('重绘和新题配图对已知数精确核对整数位数，不填掉未知答案', () => {
+            for (const prompt of [generateFigurePrompt('两位数乘25'), generateSimilarQuestionPrompt('zh', '两位数乘25', ['乘法'], 'medium')]) {
+                expect(prompt).toContain('符号和前导零不计入位数');
+                expect(prompt).toContain('3.4不能当作两位整数');
+                expect(prompt).toContain('不把微小的非零小数部分舍入掉');
+                expect(prompt).toContain('未知填空仍保留');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图保留题首信息及公式样式的条件边界（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('日期：2026-11-15。计算34×25。'), generateSimilarQuestionPrompt(language, '计算34×25。', ['乘法'], 'medium')]) {
+                expect(prompt).toContain('题首带明确标签、格式有效且已完整分隔');
+                expect(prompt).toContain('无参数样式和间距命令不能取消完整算式核对');
+                expect(prompt).toContain('不得因此删除原题文字');
+                expect(prompt).toContain('分数和多个候选算式仍须保守处理');
+            }
+        });
+
+        it('结构化配图明确 SVG 文本不做 KaTeX 求值，LaTeX 无法表达时回退', () => {
+            const prompt = generateFigurePrompt('图中标注为 \\$\\frac{1}{2}\\$');
+            expect(prompt).toContain('SVG 文本不经过 KaTeX 排版');
+            expect(prompt).toContain('不要把公式拆开、改写或自行求值');
+            expect(prompt).toContain('使用完整旧 SVG、原图或手动配图兜底');
+        });
+
         it('提供错题本候选知识点时只列出这些标签，不再按学科、年级取标签', () => {
             const prompt = generateAnalyzePrompt('zh', 4, '数学', {
                 candidateTags: { subjectName: '数学', tags: ['鸡兔同笼', '植树问题'] },

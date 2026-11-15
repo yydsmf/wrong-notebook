@@ -105,6 +105,49 @@ describe('POST /api/error-items/:id/figure', () => {
         }
     });
 
+    it.each([null, svg])('题首日期和公式样式不取消数字冲突的失败或完整旧图回退：%s', async (legacy) => {
+        const question = '日期：2026-11-15。计算 $\\displaystyle34\\times25$。';
+        mocks.errorItem.findUnique.mockResolvedValue({
+            userId: 'user-1', originalImageUrl: 'data:image/png;base64,QUJD', questionText: question,
+        });
+        mocks.generateFigureSvg.mockResolvedValue(parseFigure('true', legacy, JSON.stringify({
+            type: 'vertical_arithmetic', operation: '×', top: '43', bottom: '25',
+        }), question));
+
+        const response = await call();
+
+        expect(mocks.generateFigureSvg).toHaveBeenCalledWith('QUJD', 'image/png', question);
+        if (legacy) {
+            expect(response.status).toBe(200);
+            expect(mocks.errorItem.update).toHaveBeenCalledWith(expect.objectContaining({ data: { hasFigure: true, figureSvg: legacy } }));
+            expect(listBackgroundTasks('user-1')).toEqual([expect.objectContaining({ status: 'succeeded' })]);
+        } else {
+            expect(response.status).toBe(400);
+            expect((await response.json()).message).toBe('NO_FIGURE_GENERATED');
+            expect(mocks.errorItem.update).not.toHaveBeenCalled();
+            expect(listBackgroundTasks('user-1')).toEqual([expect.objectContaining({ status: 'failed', error: 'NO_FIGURE_GENERATED', canRetry: true })]);
+        }
+    });
+
+    it('题首信息只用于内部比较，正确配图保存时不改写传给模型的完整题干', async () => {
+        const question = '日期：2026-11-15。第1-3题选做。计算 $\\displaystyle34\\times25$。';
+        const result = parseFigure('true', null, JSON.stringify({
+            type: 'vertical_arithmetic', operation: '×', top: '34', bottom: '25',
+        }), question);
+        expect(result.figureSvg).not.toBeNull();
+        mocks.errorItem.findUnique.mockResolvedValue({
+            userId: 'user-1', originalImageUrl: 'data:image/png;base64,QUJD', questionText: question,
+        });
+        mocks.generateFigureSvg.mockResolvedValue(result);
+
+        const response = await call();
+
+        expect(response.status).toBe(200);
+        expect(mocks.generateFigureSvg).toHaveBeenCalledWith('QUJD', 'image/png', question);
+        expect(mocks.errorItem.update).toHaveBeenCalledWith(expect.objectContaining({ data: result }));
+        expect(listBackgroundTasks('user-1')).toEqual([expect.objectContaining({ status: 'succeeded' })]);
+    });
+
     it('未登录 401，他人题目 404，没有原图 400，均不调用 AI', async () => {
         mocks.session = null;
         expect((await call()).status).toBe(401);

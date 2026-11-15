@@ -24,29 +24,74 @@ const OPERATIONS: Record<string, FigureArithmeticConstraint['operation']> = {
     times: '×', 'multiplied by': '×', '\\times': '×', '\\cdot': '×',
     '÷': '÷', 除以: '÷', 'divided by': '÷', '\\div': '÷',
 };
+const PRESENTATION_COMMAND_PATTERN = '\\\\(?:[,;!]|(?:quad|qquad|displaystyle|textstyle|scriptstyle|scriptscriptstyle)(?![A-Za-z]))';
+const PRESENTATION_COMMAND = new RegExp(`^${PRESENTATION_COMMAND_PATTERN}$`);
+const TRAILING_PRESENTATION_COMMANDS = new RegExp(`(?:${PRESENTATION_COMMAND_PATTERN}\\s*)+$`, 'u');
+const HEADER_END = '(?:[。；;，,\\r\\n]|\\.(?!\\d)|$)';
+const DATE_HEADER = new RegExp(`^(?:日期|date)[ \\t]*[:：][ \\t]*(\\d{4})([-/])(\\d{1,2})\\2(\\d{1,2})[ \\t]*${HEADER_END}`, 'i');
+const TIME_HEADER = new RegExp(`^(?:(?:练习|答题)?时间|time)[ \\t]*[:：][ \\t]*(\\d{1,2}):(\\d{2})[ \\t]*[-−–—~～至到][ \\t]*(\\d{1,2}):(\\d{2})[ \\t]*${HEADER_END}`, 'i');
+const QUESTION_RANGE_HEADER = new RegExp(`^第[ \\t]*(\\d{1,4})[ \\t]*[-−–—~～至到][ \\t]*(\\d{1,4})[ \\t]*题(?:[ \\t]*(?:选做|必做))?[ \\t]*${HEADER_END}`);
+
+/** 仅排除题首已确认的附加信息；正文、公式和未完整分隔的片段不删改。 */
+function withoutMetadataHeaders(questionText: string): string {
+    let text = questionText.trimStart();
+    while (text) {
+        const date = DATE_HEADER.exec(text);
+        if (date) {
+            const [, yearText, , monthText, dayText] = date;
+            const year = Number(yearText), month = Number(monthText), day = Number(dayText);
+            const value = new Date(Date.UTC(year, month - 1, day));
+            if (year >= 1000 && value.getUTCFullYear() === year && value.getUTCMonth() === month - 1 && value.getUTCDate() === day) {
+                text = text.slice(date[0].length).trimStart();
+                continue;
+            }
+        }
+        const time = TIME_HEADER.exec(text);
+        if (time && Number(time[1]) < 24 && Number(time[2]) < 60 && Number(time[3]) < 24 && Number(time[4]) < 60) {
+            text = text.slice(time[0].length).trimStart();
+            continue;
+        }
+        const range = QUESTION_RANGE_HEADER.exec(text);
+        if (range && Number(range[1]) > 0 && Number(range[2]) >= Number(range[1])) {
+            text = text.slice(range[0].length).trimStart();
+            continue;
+        }
+        break;
+    }
+    return text;
+}
 
 function operationFor(text: string | undefined): FigureArithmeticConstraint['operation'] | undefined {
     const key = text?.toLowerCase();
     return key && Object.hasOwn(OPERATIONS, key) ? OPERATIONS[key] : undefined;
 }
 
+function canonicalizeOperand(value: string): string | null {
+    const text = value.trim().replace(/^−/, '-').replace(/^([+-])\s+/, '$1');
+    if (text.length > 40 || !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)) return null;
+    const [integer, decimal = ''] = text.replace(/^[+-]/, '').split('.');
+    const whole = (integer || '0').replace(/^0+(?=\d)/, '');
+    const fraction = decimal.replace(/0+$/, '');
+    const sign = text.startsWith('-') && (whole !== '0' || fraction) ? '-' : '';
+    return `${sign}${whole}${fraction ? `.${fraction}` : ''}`;
+}
+
 /** 比较完整的有限十进制数，不截取数字片段，也不改写保存的原文。 */
 export function arithmeticOperandMatches(actual: string, expected: string): boolean {
-    const canonicalize = (value: string): string | null => {
-        const text = value.trim().replace(/^−/, '-').replace(/^([+-])\s+/, '$1');
-        if (text.length > 40 || !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)) return null;
-        const [integer, decimal = ''] = text.replace(/^[+-]/, '').split('.');
-        const whole = (integer || '0').replace(/^0+(?=\d)/, '');
-        const fraction = decimal.replace(/0+$/, '');
-        const sign = text.startsWith('-') && (whole !== '0' || fraction) ? '-' : '';
-        return `${sign}${whole}${fraction ? `.${fraction}` : ''}`;
-    };
-    const actualValue = canonicalize(actual);
-    return actualValue !== null && actualValue === canonicalize(expected);
+    const actualValue = canonicalizeOperand(actual);
+    return actualValue !== null && actualValue === canonicalizeOperand(expected);
+}
+
+/** 已知值按整数绝对值核对位数；填空保留原有数位检查，复杂式不求值。 */
+export function arithmeticDigitCountMatches(actual: string, expected: number): boolean {
+    const value = canonicalizeOperand(actual);
+    if (value !== null) return !value.includes('.') && value.replace(/^-/, '').length === expected;
+    if (!/^[\d□?_＿]+$/u.test(actual)) return true;
+    return actual.length === expected;
 }
 
 function wholeOperandBoundary(text: string, start: number, end: number): boolean {
-    const before = text.slice(0, start);
+    const before = text.slice(0, start).replace(TRAILING_PRESENTATION_COMMANDS, '');
     const after = text.slice(end);
     // 字母、指数和千分位可能属于更大的数学标记，不能从中截取整数或小数。
     return !/[\dA-Za-z_.^²³⁰¹⁴⁵⁶⁷⁸⁹]$/u.test(before)
@@ -98,7 +143,7 @@ function explicitConstraints(questionText: string): { constraints: FigureArithme
         const text = match[0].replace(/\s+/g, ' ');
         if (/^(?:=|<|>|≤|≥|\\[()[\]])$/.test(text) || (/^[A-Za-z]+$/.test(text) && !operationFor(text))) {
             flush();
-        } else if (!/^(?:\\[,;!]|\\quad|\\qquad)$/.test(text)) {
+        } else if (!PRESENTATION_COMMAND.test(text)) {
             run.push({ text, start, end });
         }
         previousEnd = end;
@@ -137,7 +182,8 @@ function digitLengthConstraints(questionText: string): FigureArithmeticConstrain
 
 /** 仅返回唯一的完整二元算式及位数条件，复杂式与多个候选不猜测对应关系。 */
 export function extractFigureArithmeticConstraints(questionText: string): FigureArithmeticConstraint[] {
-    const explicit = explicitConstraints(questionText);
+    const content = withoutMetadataHeaders(questionText);
+    const explicit = explicitConstraints(content);
     if (explicit.ambiguous) return [];
     const distinct = (constraints: FigureArithmeticConstraint[]) => constraints.filter((constraint, index, all) => all.findIndex((candidate) =>
         candidate.operation === constraint.operation
@@ -145,6 +191,6 @@ export function extractFigureArithmeticConstraints(questionText: string): Figure
         && (candidate.top === constraint.top || Boolean(candidate.top && constraint.top && arithmeticOperandMatches(candidate.top, constraint.top)))
         && (candidate.bottom === constraint.bottom || Boolean(candidate.bottom && constraint.bottom && arithmeticOperandMatches(candidate.bottom, constraint.bottom)))) === index);
     const expressions = distinct(explicit.constraints);
-    const lengths = distinct(digitLengthConstraints(questionText));
+    const lengths = distinct(digitLengthConstraints(content));
     return expressions.length > 1 || lengths.length > 1 ? [] : [...expressions, ...lengths];
 }

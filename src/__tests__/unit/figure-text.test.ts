@@ -18,6 +18,24 @@ describe('数学标注分词', () => {
         expect(tokenizeFigureText(`已知${token}时`)).toEqual(['已', '知', token, '时']);
     });
 
+    it.each([
+        '$\\frac{1}{2}$', '$$\\dfrac{12}{25}$$', '\\(\\sqrt[3]{27}\\)', '\\[\\left(x + 1\\right)\\]',
+        '$\\angle ABC$', '$\\triangle ABC$', '$\\overline{AB}$', '$\\text{厘米}$', '$\\frac{\\sqrt{3}}{2}$',
+    ])('成对定界的 LaTeX 文本不可被分词拆开：%s', (formula) => {
+        expect(tokenizeFigureText(`已知${formula}时`)).toEqual(['已', '知', formula, '时']);
+    });
+
+    it.each(['\\frac{1}{2}', '\\dfrac{12}{25}', '\\sqrt[3]{27}', '\\mathrm{cm}^2'])('连续原始 LaTeX 命令保持完整：%s', (formula) => {
+        expect(tokenizeFigureText(`已知${formula}时`)).toEqual(['已', '知', formula, '时']);
+    });
+
+    it('未闭合公式不把后续普通说明吞成一个数学标记', () => {
+        const value = '已知 $\\frac{1}{2} 后继续说明';
+        const tokens = tokenizeFigureText(value);
+        expect(tokens.join('')).toBe(value);
+        expect(tokens.length).toBeGreaterThan(4);
+    });
+
     it.each(['葛\u{e0100}', '汉\ufe00', 'x\u20d7', 'e\u0301'])('完整字形 %s 不能拆开', (cluster) => {
         const tokens = tokenizeFigureText(`甲${cluster}乙`);
         expect(tokens).toEqual(['甲', cluster, '乙']);
@@ -34,6 +52,25 @@ describe('数学标注分词', () => {
         expect(tokenizeFigureText('12  34')).toEqual(['12', ' ', ' ', '34']);
         expect(tokenizeFigureText('12 cm and 4 mm')).toEqual(['12 cm', ' ', 'a', 'n', 'd', ' ', '4 mm']);
         expect(tokenizeFigureText('first-term')).toEqual(Array.from('first-term'));
+    });
+});
+
+describe('组合字形的标注尺寸', () => {
+    it.each([
+        ['combining marks', 'e\u0301'.repeat(16)],
+        ['variation selectors', '汉\ufe00'.repeat(8)],
+    ])('%s count as one displayed grapheme in title sizing', (_kind, title) => {
+        const normalized = title.normalize('NFC');
+        const renderTitle = (value: string) => {
+            const svg = renderFigureSpec(JSON.stringify({ type: 'area_geometry', shape: 'square', width: 5, height: 5, title: value }));
+            expect(svg).not.toBeNull();
+            return new DOMParser().parseFromString(svg!, 'image/svg+xml').querySelector('text[data-figure-title="true"]')!;
+        };
+        const originalTitle = renderTitle(title);
+        const normalizedTitle = renderTitle(normalized);
+        expect(originalTitle.textContent?.normalize('NFC')).toBe(normalizedTitle.textContent?.normalize('NFC'));
+        expect(originalTitle.querySelectorAll('tspan').length).toBe(normalizedTitle.querySelectorAll('tspan').length);
+        expect(originalTitle.querySelectorAll('tspan')).toHaveLength(0);
     });
 });
 
@@ -66,6 +103,23 @@ describe('数学标注分行保真', () => {
         const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
         const text = Array.from(document.querySelectorAll('text')).find((element) => element.textContent === '为a√2时')!;
         expect(Array.from(text.querySelectorAll('tspan'), (line) => line.textContent).some((line) => line?.includes('√2'))).toBe(true);
+    });
+
+    it('窄表格中短公式完整换行，宽公式触发旧图回退而不拆开', () => {
+        const headers = Array.from({ length: 12 }, (_, index) => `列${index + 1}`);
+        const shortLabel = '已知$x$时';
+        const shortSpec = { type: 'table', headers, rows: [[shortLabel]] };
+        const shortSvg = renderFigureSpec(JSON.stringify(shortSpec));
+        expect(shortSvg).not.toBeNull();
+        const document = new DOMParser().parseFromString(shortSvg!, 'image/svg+xml');
+        const text = Array.from(document.querySelectorAll('text')).find((element) => element.textContent === shortLabel)!;
+        expect(Array.from(text.querySelectorAll('tspan'), (line) => line.textContent).some((line) => line?.includes('$x$'))).toBe(true);
+
+        const longLabel = '已知$\\frac{1}{2}$时';
+        const longSpec = JSON.stringify({ type: 'table', headers, rows: [[longLabel]] });
+        expect(renderFigureSpec(longSpec)).toBeNull();
+        expect(parseFigure('true', legacy, longSpec).figureSvg).toBe(legacy);
+        expect(parseFigure('true', null, longSpec).figureSvg).toBeNull();
     });
 
     it('6×6 方格保留原始组合反例，完整速度单位超过当前字号与边距限制时回退', () => {

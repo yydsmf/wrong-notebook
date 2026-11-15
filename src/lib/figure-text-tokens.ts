@@ -3,7 +3,8 @@ const chineseUnit = String.raw`(?:(?:平方|立方)?(?:千米|分米|厘米|毫�
 const unit = String.raw`(?:${chineseUnit}|mm|cm|dm|km|m|mg|kg|g|t|mL|ml|L|l|min|h|s|Hz|N|Pa|J|W|°C|℃|℉|°|%|‰)(?:[²³23]|\^[23])?`;
 const unitExpression = String.raw`${unit}(?:\s*[\/·]\s*${unit})?`;
 const unitPattern = new RegExp(`^(?:${unitExpression})[,.]*$`, 'u');
-const mathRun = new RegExp(String.raw`[\p{Script=Latin}\p{Script=Greek}\p{N}\p{M}\u2070-\u209f\u2100-\u214f\u{1d400}-\u{1d7ff}+\-−±×÷*=<>≤≥≠≈.,:∶\/⁄%‰°′″^()[\]{}√∛∜⋅·]+(?:\s*${chineseUnit}(?:\s*\/\s*${chineseUnit})?)?`, 'uy');
+const delimitedMath = /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?:\\.|[^$\\\n])+?\$/g;
+const mathRun = new RegExp(String.raw`[\p{Script=Latin}\p{Script=Greek}\p{N}\p{M}\u2070-\u209f\u2100-\u214f\u{1d400}-\u{1d7ff}+\-−±×÷*=<>≤≥≠≈.,:∶\/⁄%‰°′″^()[\]{}√∛∜⋅·\\]+(?:\s*${chineseUnit}(?:\s*\/\s*${chineseUnit})?)?`, 'uy');
 const numberMarker = /[\p{N}\u2070-\u209f′″]/u;
 const mathMarker = /[\p{Lm}+−±×÷*=<>≤≥≠≈:∶\/⁄^√∛∜⋅]/u;
 const operationAtEnd = /[+\-−±×÷*=<>≤≥≠≈:∶\/⁄^√∛∜⋅·([{]$/u;
@@ -19,11 +20,21 @@ interface TextToken {
 export function tokenizeFigureText(value: string): string[] {
     const graphemes = Array.from(graphemeSegmenter.segment(value));
     const boundaries = new Set([...graphemes.map((entry) => entry.index), value.length]);
+    const mathSegments = Array.from(value.matchAll(delimitedMath), (match) => ({ text: match[0], start: match.index! }));
     const tokens: TextToken[] = [];
     let offset = 0;
+    let mathIndex = 0;
     for (let index = 0; index < graphemes.length;) {
         const grapheme = graphemes[index];
         if (grapheme.index < offset) { index++; continue; }
+        const mathSegment = mathSegments[mathIndex];
+        if (mathSegment?.start === offset) {
+            tokens.push({ text: mathSegment.text, math: true, joined: true });
+            offset += mathSegment.text.length;
+            mathIndex++;
+            index++;
+            continue;
+        }
         if (/^\s+$/u.test(grapheme.segment)) {
             let whitespace = grapheme.segment;
             while (/^\s+$/u.test(graphemes[index + 1]?.segment ?? '')) {

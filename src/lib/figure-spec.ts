@@ -7,6 +7,8 @@ import { validateCircleLengths, validateFigureLengths, validateRightAngleLabel }
 import { validateFigureQuestionConsistency } from './figure-question-consistency';
 import type { FigureAngularLabel, FigureCircleLabel, FigureLabelBox, FigureLabelObstacle, FigurePoint, FigureSegmentLabel } from './figure-label-layout';
 
+const figureGraphemeSegmenter = new Intl.Segmenter('und', { granularity: 'grapheme' });
+
 /**
  * 图形结构化描述。AI 只负责识别结构和题目中的数字，SVG 由本地模板绘制。
  * 坐标类字段统一使用 0~100 的相对坐标，避免模型直接生成脆弱的 SVG 坐标。
@@ -1019,16 +1021,18 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function displayLength(value: string): number {
-    return Array.from(value).length;
+    return Array.from(figureGraphemeSegmenter.segment(value)).length;
 }
 
 function displayWidth(value: string): number {
-    return Array.from(value).reduce((width, character) => {
-        const codePoint = character.codePointAt(0) ?? 0;
-        if (codePoint > 0x7f) return width + 1;
+    return Array.from(figureGraphemeSegmenter.segment(value), ({ segment }) => segment).reduce((width, grapheme) => {
+        // 组合附加符号、变体选择符和连接符已经包含在前一个字形中，不应再次放大文字框。
+        if (/^[\p{M}\p{Cf}]+$/u.test(grapheme)) return width;
+        const codePoint = grapheme.codePointAt(0) ?? 0;
+        if (codePoint > 0x7f && !/^\p{Script=Latin}/u.test(grapheme)) return width + 1;
         // 宽西文字母留出字体差异的余量，避免估算能放下但浏览器渲染越格。
-        if (/[MWmw@%&]/.test(character)) return width + 1.1;
-        return width + (/[A-Z]/.test(character) ? 0.8 : 0.62);
+        if (/[MWmw@%&]/.test(grapheme)) return width + 1.1;
+        return width + (/[A-Z]/.test(grapheme) ? 0.8 : 0.62);
     }, 0);
 }
 

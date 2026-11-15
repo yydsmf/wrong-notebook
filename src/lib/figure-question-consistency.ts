@@ -1,6 +1,6 @@
 import type { FigureSpec } from './figure-spec';
 import { validateFigureLengths } from './figure-measurements';
-import { arithmeticOperandMatches, extractFigureArithmeticConstraints } from './figure-arithmetic-constraints';
+import { arithmeticDigitCountMatches, arithmeticOperandMatches, extractFigureArithmeticConstraints } from './figure-arithmetic-constraints';
 import type { FigureArithmeticConstraint } from './figure-arithmetic-constraints';
 
 type ExplicitQuestionShape = 'triangle' | 'rectangle' | 'square' | 'parallelogram' | 'trapezoid' | 'cube' | 'cuboid';
@@ -25,11 +25,6 @@ const PARTIAL_FIGURE_QUESTION = /阴影|涂色|部分|拼|切|裁|折|展开|截
 
 function normalizeQuestionText(value: string): string {
     return value.replace(/[\uff01-\uff5e]/g, (character) => String.fromCharCode(character.charCodeAt(0) - 0xfee0));
-}
-
-function digitCountMatches(actual: string, expected: number): boolean {
-    if (!/^[\d□?_＿]+$/u.test(actual)) return true;
-    return actual.length === expected;
 }
 
 function uniqueQuestionShape(questionText: string): ExplicitQuestionShape | null {
@@ -90,8 +85,8 @@ function matchesArithmeticConstraint(
     if (figure.operation !== constraint.operation) return false;
     if (constraint.top && !arithmeticOperandMatches(figure.top, constraint.top)) return false;
     if (constraint.bottom && !arithmeticOperandMatches(figure.bottom, constraint.bottom)) return false;
-    if (constraint.topDigits && !digitCountMatches(figure.top, constraint.topDigits)) return false;
-    if (constraint.bottomDigits && !digitCountMatches(figure.bottom, constraint.bottomDigits)) return false;
+    if (constraint.topDigits && !arithmeticDigitCountMatches(figure.top, constraint.topDigits)) return false;
+    if (constraint.bottomDigits && !arithmeticDigitCountMatches(figure.bottom, constraint.bottomDigits)) return false;
     return true;
 }
 
