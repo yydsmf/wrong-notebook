@@ -25,7 +25,11 @@ describe('数学标注分词', () => {
         expect(tokenizeFigureText(`已知${formula}时`)).toEqual(['已', '知', formula, '时']);
     });
 
-    it.each(['\\frac{1}{2}', '\\dfrac{12}{25}', '\\sqrt[3]{27}', '\\mathrm{cm}^2'])('连续原始 LaTeX 命令保持完整：%s', (formula) => {
+    it.each([
+        '\\frac{1}{2}', '\\dfrac{12}{25}', '\\sqrt[3]{27}', '\\mathrm{cm}^2',
+        '\\frac {1} {2}', '\\sqrt [3] {27}', '\\text {厘米}', '\\frac {\\sqrt {3}} {2}',
+        '\\left ( x + 1 \\right )', '\\left ( a + \\left [ b \\right ] \\right )', '\\angle {ABC}',
+    ])('连续原始 LaTeX 命令保持完整：%s', (formula) => {
         expect(tokenizeFigureText(`已知${formula}时`)).toEqual(['已', '知', formula, '时']);
     });
 
@@ -34,6 +38,13 @@ describe('数学标注分词', () => {
         const tokens = tokenizeFigureText(value);
         expect(tokens.join('')).toBe(value);
         expect(tokens.length).toBeGreaterThan(4);
+    });
+
+    it.each(['\\frac {1} 后继续说明', '\\sqrt [3] 后继续说明', '\\left ( x + 1 后继续说明'])('不完整的原始命令不吞掉后续正文：%s', (value) => {
+        const text = `已知${value}`;
+        const tokens = tokenizeFigureText(text);
+        expect(tokens.join('')).toBe(text);
+        expect(tokens).not.toContain(text.slice(2));
     });
 
     it.each(['葛\u{e0100}', '汉\ufe00', 'x\u20d7', 'e\u0301'])('完整字形 %s 不能拆开', (cluster) => {
@@ -120,6 +131,18 @@ describe('数学标注分行保真', () => {
         expect(renderFigureSpec(longSpec)).toBeNull();
         expect(parseFigure('true', legacy, longSpec).figureSvg).toBe(legacy);
         expect(parseFigure('true', null, longSpec).figureSvg).toBeNull();
+    });
+
+    it('表格换行时带空格的完整原始 LaTeX 参数组保持同一行', () => {
+        const formula = '\\frac {1} {2}';
+        const label = `公式前文${formula}后文`;
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'table', headers: ['第一列', '第二列', '第三列', '第四列'], rows: [[label, '', '', '']],
+        }));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const text = Array.from(document.querySelectorAll('text')).find((element) => element.textContent === label)!;
+        expect(Array.from(text.querySelectorAll('tspan'), (line) => line.textContent)).toContain(formula);
     });
 
     it('6×6 方格保留原始组合反例，完整速度单位超过当前字号与边距限制时回退', () => {

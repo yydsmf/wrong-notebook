@@ -128,6 +128,8 @@ describe('AI Prompts', () => {
         it('结构化配图明确 SVG 文本不做 KaTeX 求值，LaTeX 无法表达时回退', () => {
             const prompt = generateFigurePrompt('图中标注为 \\$\\frac{1}{2}\\$');
             expect(prompt).toContain('SVG 文本不经过 KaTeX 排版');
+            expect(prompt).toContain('参数之间有空格的形式：\\frac {1} {2}');
+            expect(prompt).toContain('成对的 \\left ... \\right');
             expect(prompt).toContain('不要把公式拆开、改写或自行求值');
             expect(prompt).toContain('使用完整旧 SVG、原图或手动配图兜底');
         });
