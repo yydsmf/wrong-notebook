@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import type { CSSProperties } from "react";
 import ReactCrop from "react-image-crop";
 import type { Crop } from "react-image-crop";
-import { RefreshCcw, RotateCcw, RotateCw } from "lucide-react";
+import { Loader2, RefreshCcw, RotateCcw, RotateCw } from "lucide-react";
 import "react-image-crop/dist/ReactCrop.css";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -33,9 +33,13 @@ interface ImageCropperProps {
     onRegionsSelected?: (regions: ImageRegion[], multi: boolean, rotation: ImageRotation) => void;
     /** 显示多区域框选模式；结果仍由 onRegionsSelected 返回给调用方处理。 */
     enableMultiCrop?: boolean;
+    position?: { current: number; total: number };
+    isProcessing?: boolean;
+    initialMode?: "single" | "multi";
+    modeLocked?: boolean;
 }
 
-export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiCropComplete, onRegionsSelected, enableMultiCrop = false }: ImageCropperProps) {
+export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiCropComplete, onRegionsSelected, enableMultiCrop = false, position, isProcessing = false, initialMode = "single", modeLocked = false }: ImageCropperProps) {
     const { t } = useLanguage();
     const [rotation, setRotation] = useState<ImageRotation>(0);
     const [displayImageSrc, setDisplayImageSrc] = useState(imageSrc);
@@ -44,7 +48,7 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
     // 始终保存百分比坐标，缩放改变图片显示尺寸后仍然准确
     const [crop, setCrop] = useState<Crop>();
     const imgRef = useRef<HTMLImageElement>(null);
-    const [mode, setModeState] = useState<"single" | "multi">("single");
+    const [mode, setModeState] = useState<"single" | "multi">(initialMode);
     const { containerRef, zoom, imageStyle, measureImage, zoomIn, zoomOut, reset: resetZoom } = useImageZoom(FIT_STYLE[mode]);
     // 换图后回到 100%
     useEffect(() => {
@@ -59,6 +63,9 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
     const regions = regionState.src === displayImageSrc ? regionState.regions : [];
     const setRegions = (next: ImageRegion[]) => setRegionState({ src: displayImageSrc, regions: next });
     const multiImgRef = useRef<HTMLImageElement>(null);
+    const queueConfirmLabel = position && position.total > 1
+        ? (position.current < position.total ? t.common.cropper.confirmNext : t.common.cropper.finishCropping)
+        : null;
 
     const releaseGeneratedPreview = () => {
         if (generatedPreviewRef.current) {
@@ -112,7 +119,6 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
         if (regions.length === 0) return;
         if (onRegionsSelected) {
             onRegionsSelected(regions, true, rotation);
-            setRegions([]);
             return;
         }
         if (!multiImgRef.current || !onMultiCropComplete) return;
@@ -153,9 +159,21 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
             <DialogContent className="max-w-3xl h-[90vh] flex flex-col p-0 gap-0">
                 <DialogHeader className="p-4 border-b shrink-0">
                     <DialogTitle>{t.common.cropper?.title || "Crop Image"}</DialogTitle>
+                    {position && position.total > 1 && (
+                        <p className="text-sm text-muted-foreground" aria-live="polite">
+                            {t.common.cropper.imagePosition
+                                .replace("{current}", String(position.current))
+                                .replace("{total}", String(position.total))}
+                        </p>
+                    )}
                 </DialogHeader>
 
                 <div className="relative min-h-0 flex-1 bg-black">
+                    {isProcessing && (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/50" role="status" aria-label={t.common.progress.compressing}>
+                            <Loader2 className="h-8 w-8 animate-spin text-white" />
+                        </div>
+                    )}
                     {/* m-auto 居中：图片放大超出容器后仍能滚动到左上角 */}
                     <div ref={containerRef} className="flex h-full w-full overflow-auto p-4">
                         <div className="m-auto">
@@ -224,6 +242,7 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
                                     key={value}
                                     type="button"
                                     onClick={() => setMode(value)}
+                                    disabled={isProcessing || modeLocked}
                                     className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${mode === value ? "bg-background shadow-sm" : "text-muted-foreground"}`}
                                 >
                                     {value === "single" ? t.batchImport.singleMode : t.batchImport.multiMode}
@@ -239,7 +258,7 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
                         </p>
                         <div className="flex gap-2 justify-end">
                             {mode === "multi" && regions.length > 0 && (
-                                <Button variant="ghost" onClick={() => setRegions([])}>
+                                <Button variant="ghost" onClick={() => setRegions([])} disabled={isProcessing}>
                                     {t.batchImport.clear}
                                 </Button>
                             )}
@@ -247,12 +266,12 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete, onMultiC
                                 {t.common.cancel || "Cancel"}
                             </Button>
                             {mode === "multi" ? (
-                                <Button onClick={handleMultiConfirm} disabled={regions.length === 0}>
-                                    {t.batchImport.start.replace("{count}", String(regions.length))}
+                                <Button onClick={handleMultiConfirm} disabled={regions.length === 0 || isProcessing}>
+                                    {queueConfirmLabel || t.batchImport.start.replace("{count}", String(regions.length))}
                                 </Button>
                             ) : (
-                                <Button onClick={handleConfirm}>
-                                    {t.common.confirm || "Confirm"}
+                                <Button onClick={handleConfirm} disabled={isProcessing}>
+                                    {queueConfirmLabel || t.common.confirm || "Confirm"}
                                 </Button>
                             )}
                         </div>

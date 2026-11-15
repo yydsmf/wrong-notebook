@@ -49,6 +49,19 @@ describe('/api/reanswer', () => {
     });
 
     describe('POST /api/reanswer (重新回答问题)', () => {
+        it('校对多图题重新解答时完整传递全部图片，只调用一次 AI', async () => {
+            mocks.mockAIService.reanswerQuestion.mockResolvedValue({ answerText: '答案', analysis: '解析' });
+            const images = ['data:image/png;base64,QQ==', 'data:image/jpeg;base64,Qg=='];
+            const response = await POST(new Request('http://localhost/api/reanswer', {
+                method: 'POST', body: JSON.stringify({ questionText: '跨页题', images }),
+            }));
+            expect(response.status).toBe(200);
+            expect(mocks.mockAIService.reanswerQuestion).toHaveBeenCalledTimes(1);
+            const args = mocks.mockAIService.reanswerQuestion.mock.calls[0];
+            expect(args[3]).toBe(images[0]);
+            expect(args[6]).toEqual([{ base64: 'Qg==', mimeType: 'image/jpeg' }]);
+        });
+
         it.each([['fixed', '四年级上', '四年级上'], ['ai', null, '高二下']] as const)('新文字录入遵循 %s 年级规则', async (gradeRecognitionMode, targetGrade, expectedGrade) => {
             scopeMocks.findUser.mockResolvedValue({ gradeRecognitionMode, fixedGradeSemester: '四年级上', educationStage: 'junior_high', enrollmentYear: 2025 });
             mocks.mockAIService.reanswerQuestion.mockResolvedValue({ answerText: '答', analysis: '析', gradeSemester: '高二下' });

@@ -47,7 +47,7 @@ const STAGE_ESTIMATES: Record<ActiveProgressStatus, number> = {
     completed: 100,
 };
 
-const DEFAULT_ANALYSIS_TIMEOUT_MS = 180000;
+const DEFAULT_ANALYSIS_TIMEOUT_MS = 10 * 60 * 1000;
 const ANALYSIS_PROGRESS_START = 25;
 const ANALYSIS_PROGRESS_END = 80;
 

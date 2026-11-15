@@ -10,7 +10,7 @@ import { toast } from "@/lib/feedback";
 
 interface RegenerateFigureButtonProps {
     errorItemId: string;
-    /** 生成完成后回调新的配图（无配图时为 null） */
+    /** 有可用配图时更新页面；失败保留当前内容。 */
     onDone: (figure: { hasFigure: boolean; figureSvg: string | null }) => void;
 }
 
@@ -29,7 +29,7 @@ export function RegenerateFigureButton({ errorItemId, onDone }: RegenerateFigure
             const code = (error as { data?: { message?: string } })?.data?.message || "";
             const mapped = (t.errors as Record<string, unknown>)[code];
             frontendLogger.error('[RegenerateFigure]', 'Failed to regenerate figure', { code });
-            toast.error(code === "NO_ORIGINAL_IMAGE" ? t.figure.noImage : typeof mapped === "string" ? mapped : t.figure.failed);
+            toast.error(code === "NO_ORIGINAL_IMAGE" ? t.figure.noImage : code === "NO_FIGURE_GENERATED" ? t.figure.unusable : typeof mapped === "string" ? mapped : t.figure.failed);
         } finally {
             setRunning(false);
         }

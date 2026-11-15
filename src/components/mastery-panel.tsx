@@ -14,6 +14,7 @@ import { PracticeRecordForm } from "@/components/practice-record-form";
 import { QuestionFigure } from "@/components/question-figure";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { apiClient } from "@/lib/api-client";
+import { getOriginalImages } from '@/lib/original-images';
 import { toast, confirmDialog } from "@/lib/feedback";
 import { isMastered } from "@/lib/mastery-status";
 import type { MasteryStatus } from "@/lib/mastery-status";
@@ -190,9 +191,9 @@ export function MasteryPanel({ errorItemId, onMasteryStatusChange }: MasteryPane
                                                     <MarkdownRenderer content={record.mistakeAnalysis} />
                                                 </div>
                                             )}
-                                            {record.originalImageUrl && (
+                                            {getOriginalImages(record).length > 0 && (
                                                 // 作答图片可能来自上传的数据 URL，按原始比例显示。
-                                                <img src={record.originalImageUrl} alt={t.editor.wrongAnswerText} className="max-h-96 max-w-full rounded object-contain" />
+                                                <div className="space-y-2">{getOriginalImages(record).map((src, index) => <img key={index} src={src} alt={`${t.editor.wrongAnswerText} ${index + 1}`} className="max-h-96 max-w-full rounded object-contain" />)}</div>
                                             )}
                                             {record.answerText && (
                                                 <div className="border-t pt-2">

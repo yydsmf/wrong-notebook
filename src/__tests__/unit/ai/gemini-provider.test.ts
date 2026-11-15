@@ -4,6 +4,7 @@
  * 测试 Gemini 服务响应解析和错因同步
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { FIGURE_GROUP_PROVIDER_RESPONSE } from '@/__tests__/fixtures/figure-group-fixtures';
 
 const mockGenerateContent = vi.hoisted(() => vi.fn());
 
@@ -377,5 +378,49 @@ describe('请求材料边界与标签约束回归', () => {
         expect(JSON.parse(request.contents).data.tagOptions.candidateTags).toEqual(candidates);
         const empty = await provider.reanswerQuestion(question, 'zh', '数学', undefined, null, { subjectName: '数学', tags: [] });
         expect(empty.knowledgePoints).toEqual([]);
+    });
+});
+
+describe('配图多图参考', () => {
+    it('举一反三的竖式与新题数字矛盾时回退完整旧 SVG', async () => {
+        mockGenerateContent.mockResolvedValue({ text: '<question_text>请列竖式计算34×25。</question_text><answer_text>850</answer_text><analysis>计算</analysis><has_figure>true</has_figure><figure_spec>{"type":"vertical_arithmetic","operation":"×","top":"43","bottom":"25","partialProducts":[]}</figure_spec><figure_svg><svg><text>旧图</text></svg></figure_svg>' });
+        const provider = new GeminiProvider({ apiKey: 'test-key' });
+
+        const result = await provider.generateSimilarQuestion('求两位数乘25', []);
+
+        expect(result.figureSvg).toContain('旧图');
+        expect(result.figureSvg).not.toContain('data-arithmetic-row');
+    });
+
+    it('结构化配图校验使用目标题干，矛盾时回退完整旧 SVG', async () => {
+        mockGenerateContent.mockResolvedValue({ text: '<has_figure>true</has_figure><figure_spec>{"type":"vertical_arithmetic","operation":"×","top":"43","bottom":"25","partialProducts":[]}</figure_spec><figure_svg><svg><text>旧图</text></svg></figure_svg>' });
+        const provider = new GeminiProvider({ apiKey: 'test-key' });
+
+        const figure = await provider.generateFigureSvg('QUJD', 'image/png', '请列竖式计算34×25。');
+
+        expect(figure.figureSvg).toContain('旧图');
+        expect(figure.figureSvg).not.toContain('data-arithmetic-row');
+    });
+
+    it('从同一次配图响应解析结构化四选项图组', async () => {
+        mockGenerateContent.mockResolvedValue({ text: FIGURE_GROUP_PROVIDER_RESPONSE });
+        const provider = new GeminiProvider({ apiKey: 'test-key' });
+        const figure = await provider.generateFigureSvg('QUJD', 'image/png', '比较选项');
+        expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+        expect(figure.figureSvg?.match(/data-figure-panel=/g)).toHaveLength(4);
+        expect(figure.figureSvg).not.toContain('legacy');
+    });
+
+    it('将所有原题图片按顺序作为配图参考', async () => {
+        mockGenerateContent.mockResolvedValue({ text: '<has_figure>true</has_figure><figure_svg><svg><rect width="1" height="1"/></svg></figure_svg>' });
+        const provider = new GeminiProvider({ apiKey: 'test-key' });
+
+        await provider.generateFigureSvg('QQ==', 'image/png', '新题', [{ base64: 'Qg==', mimeType: 'image/jpeg' }]);
+
+        expect(mockGenerateContent.mock.calls[0][0].contents).toEqual([
+            { text: expect.stringContaining('新题') },
+            { inlineData: { data: 'QQ==', mimeType: 'image/png' } },
+            { inlineData: { data: 'Qg==', mimeType: 'image/jpeg' } },
+        ]);
     });
 });

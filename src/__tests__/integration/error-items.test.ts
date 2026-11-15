@@ -149,6 +149,29 @@ describe('/api/error-items', () => {
             headers: { 'Content-Type': 'application/json' },
         }));
 
+        it('单题多图保存有序完整列表且首图保持兼容', async () => {
+            const images = ['data:image/png;base64,QQ==', 'data:image/jpeg;base64,Qg=='];
+            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(null);
+            mocks.mockPrismaErrorItem.create.mockResolvedValue({ id: 'new-item' });
+            const response = await post({ ...baseData, originalImageUrl: undefined, originalImageUrls: images });
+            expect(response.status).toBe(201);
+            expect(mocks.mockPrismaErrorItem.create).toHaveBeenCalledWith(expect.objectContaining({
+                data: expect.objectContaining({ originalImageUrl: images[0], originalImageUrls: JSON.stringify(images) }),
+            }));
+        });
+
+        it('超过 10 MiB 的原图列表保存不丢页，兼容首图由服务端生成', async () => {
+            const base64 = 'A'.repeat(6 * 1024 * 1024);
+            const images = [`data:image/png;base64,${base64}`, `data:image/jpeg;base64,${base64}`];
+            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(null);
+            mocks.mockPrismaErrorItem.create.mockResolvedValue({ id: 'large-image-item' });
+            const response = await post({ ...baseData, originalImageUrl: undefined, originalImageUrls: images });
+            expect(response.status).toBe(201);
+            const saved = mocks.mockPrismaErrorItem.create.mock.calls[0][0].data;
+            expect(saved.originalImageUrl).toBe(images[0]);
+            expect(JSON.parse(saved.originalImageUrls)).toEqual(images);
+        });
+
         it('字段缺失的数据库返回迁移建议的错误码，不向前端泄漏 SQL 和路径', async () => {
             mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(null);
             mocks.mockPrismaErrorItem.create.mockRejectedValueOnce(Object.assign(new Error('SELECT private_column FROM /private/database.db'), { code: 'P2022' }));

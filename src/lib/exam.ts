@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { getAIService } from "@/lib/ai";
+import { generateSimilarQuestionWithSourceFigure } from "@/lib/ai/similar-question-figure";
+import { parseImageInput, questionImagesSchema } from "@/lib/ai/image-input";
 import type { DifficultyLevel } from "@/lib/ai/types";
 import { createLogger } from "@/lib/logger";
 import { getMasteryThreshold } from "@/lib/mastery";
@@ -8,6 +10,7 @@ import { DEFAULT_MASTERY_THRESHOLD, masteryStatusWhere } from "@/lib/mastery-sta
 import { startBackgroundTask, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
 import { resolveNotebookScope, SUBJECT_DISPLAY_NAMES } from "@/lib/notebook-scope";
 import type { BackgroundTaskHandle } from "@/lib/background-tasks";
+import { getOriginalImages } from "@/lib/original-images";
 
 const logger = createLogger('exam');
 
@@ -154,7 +157,17 @@ async function generateQuestion(questionId: string, difficulty: DifficultyLevel,
         where: { id: questionId },
         select: {
             errorItem: {
-                select: { questionText: true, knowledgePoints: true, gradeSemester: true, figureSvg: true, tags: { select: { name: true } } },
+                select: {
+                    questionText: true,
+                    knowledgePoints: true,
+                    gradeSemester: true,
+                    hasFigure: true,
+                    figureDescription: true,
+                    figureSvg: true,
+                    originalImageUrl: true,
+                    originalImageUrls: true,
+                    tags: { select: { name: true } },
+                },
             },
         },
     });
@@ -164,13 +177,17 @@ async function generateQuestion(questionId: string, difficulty: DifficultyLevel,
     }
 
     try {
-        const generated = await getAIService().generateSimilarQuestion(
-            question.errorItem.questionText || '',
-            parseTagNames(question.errorItem),
-            language,
-            difficulty,
-            question.errorItem.gradeSemester,
-            question.errorItem.figureSvg
+        const generated = await generateSimilarQuestionWithSourceFigure(
+            getAIService(),
+            [
+                question.errorItem.questionText || '',
+                parseTagNames(question.errorItem),
+                language,
+                difficulty,
+                question.errorItem.gradeSemester,
+                question.errorItem.figureSvg,
+            ],
+            question.errorItem,
         );
         await prisma.examQuestion.update({
             where: { id: questionId },
@@ -244,8 +261,8 @@ export function isPaperGenerating(paperId: string): boolean {
     return runningPapers.has(paperId);
 }
 
-/** question：重新生成题目和解答（仅未录入结果时）；answer：只重新生成解答 */
-export const EXAM_REGENERATE_MODES = ['question', 'answer'] as const;
+/** question：重新生成题目；answer：重新生成解答；figure：只重绘当前题配图 */
+export const EXAM_REGENERATE_MODES = ['question', 'answer', 'figure'] as const;
 export type ExamRegenerateMode = typeof EXAM_REGENERATE_MODES[number];
 
 export interface RegeneratedExamQuestion {
@@ -284,7 +301,11 @@ export async function regenerateExamQuestion(
                     questionText: true,
                     knowledgePoints: true,
                     gradeSemester: true,
+                    hasFigure: true,
+                    figureDescription: true,
                     figureSvg: true,
+                    originalImageUrl: true,
+                    originalImageUrls: true,
                     tags: { select: { name: true } },
                     subject: { select: { name: true, stage: true, subjectKey: true } },
                 },
@@ -300,7 +321,34 @@ export async function regenerateExamQuestion(
     }
     const task = { userId, subject: question.paper.title, link: `/exams/${paperId}` };
 
-    if (mode === 'question') {
+    if (mode === 'figure') {
+        const source = question.errorItem;
+        if (!source) throw new Error('SOURCE_DELETED');
+        if (question.status !== 'ready' || !question.questionText?.trim()) throw new Error('NO_QUESTION_TEXT');
+
+        const sourceImages = getOriginalImages(source).filter((image) => /^data:image\/[\w.+-]+;base64,/i.test(image));
+        const validImages = questionImagesSchema.safeParse(sourceImages);
+        if (!validImages.success || validImages.data.length === 0) throw new Error('NO_ORIGINAL_IMAGE');
+
+        const [firstImage, ...additionalImages] = validImages.data.map((image) => parseImageInput(image));
+        const generated = await trackBackgroundTaskForRequest(
+            req,
+            { ...task, kind: 'figure', retryRequest: { path: `/api/exams/${paperId}/questions/${questionId}/regenerate`, body: { mode, language } } },
+            () => getAIService().generateFigureSvg(
+                firstImage.base64,
+                firstImage.mimeType,
+                question.questionText,
+                additionalImages,
+            ),
+        );
+        if (!generated.figureSvg) throw new Error('NO_FIGURE_GENERATED');
+
+        const { count } = await prisma.examQuestion.updateMany({
+            where: { id: questionId, paperId, status: 'ready', questionText: question.questionText },
+            data: { figureSvg: generated.figureSvg },
+        });
+        if (count === 0) throw new Error('QUESTION_CHANGED');
+    } else if (mode === 'question') {
         if (question._count.practiceRecords > 0) throw new Error('HAS_RESULTS');
         const source = question.errorItem;
         if (!source) throw new Error('SOURCE_DELETED');
@@ -308,13 +356,17 @@ export async function regenerateExamQuestion(
         const generated = await trackBackgroundTaskForRequest(
             req,
             { ...task, kind: 'exam', retryRequest: { path: `/api/exams/${paperId}/questions/${questionId}/regenerate`, body: { mode, language } } },
-            () => getAIService().generateSimilarQuestion(
-                source.questionText || '',
-                parseTagNames(source),
-                language,
-                question.paper.difficulty as DifficultyLevel,
-                source.gradeSemester,
-                source.figureSvg
+            () => generateSimilarQuestionWithSourceFigure(
+                getAIService(),
+                [
+                    source.questionText || '',
+                    parseTagNames(source),
+                    language,
+                    question.paper.difficulty as DifficultyLevel,
+                    source.gradeSemester,
+                    source.figureSvg,
+                ],
+                source,
             ),
         );
         // AI 生成耗时较长，期间可能已录入结果，写入时再次确认

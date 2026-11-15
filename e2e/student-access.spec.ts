@@ -7,7 +7,7 @@ test('学生共享管理员题库和试卷，界面与接口隐藏参考答案�
     const title = `管理员共享试卷-${scenario.id}`;
     const paper = await scenario.db.examPaper.create({ data: {
         userId: scenario.user.id, title, status: 'ready', scope: 'all', difficulty: 'medium', requestedCount: 1, subjectIds: JSON.stringify([scenario.book.id]),
-        questions: { create: { order: 0, errorItemId: item.id, sourceShortId: item.shortId ?? '', questionText, answerText: privateAnswer, analysis: privateAnswer } },
+        questions: { create: { order: 0, status: 'ready', errorItemId: item.id, sourceShortId: item.shortId ?? '', questionText, answerText: privateAnswer, analysis: privateAnswer } },
     } });
     await scenario.db.user.update({ where: { id: scenario.otherUser.id }, data: { role: 'user' } });
     await scenario.login(page, true);

@@ -84,7 +84,7 @@ describe('usePracticeSession', () => {
 
         expect(mocks.post).toHaveBeenCalledWith('/api/practice/generate',
             { errorItemId: 'item-1', language: expect.any(String), difficulty: 'easy' },
-            { timeout: 60000, recoverable: true });
+            { timeout: 120000, recoverable: true });
         expect(session.question?.questionText).toBe('3 + 4 = ?');
         expect(session.generatedDifficulty).toBe('easy');
         expect(session.questionVersion).toBe(1);

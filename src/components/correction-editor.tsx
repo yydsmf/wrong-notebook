@@ -31,12 +31,13 @@ interface CorrectionEditorProps {
     onSave: (data: CorrectionDraft) => Promise<void>;
     onCancel: () => void;
     imagePreview?: string | null;
+    imagePreviews?: string[];
     initialSubjectId?: string;
     aiTimeout?: number;
 }
 
 /** AI 识别后的校对页：左侧编辑，右侧预览，确认后保存到错题本 */
-export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, initialSubjectId, aiTimeout }: CorrectionEditorProps) {
+export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, imagePreviews, initialSubjectId, aiTimeout }: CorrectionEditorProps) {
     const { timeZone } = useTimeZone();
     const { t, language } = useLanguage();
     const [data, setData] = useState<CorrectionDraft>({
@@ -99,10 +100,11 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                 language,
                 subject: data.subject,
                 imagePreview,
+                imagePreviews,
                 gradeSemester: data.gradeSemester ?? undefined,
                 subjectId: data.subjectId,
             });
-            frontendLogger.info('[Reanswer]', requestBody.imageBase64 ? 'Sending image + text (image available for mistake analysis)' : 'Sending text only (no image available)', { timeout: aiTimeout });
+            frontendLogger.info('[Reanswer]', requestBody.imageBase64 || requestBody.images?.length ? 'Sending image + text (image available for mistake analysis)' : 'Sending text only (no image available)', { timeout: aiTimeout });
 
             const result = await apiClient.post<ReanswerQuestionResult>("/api/reanswer", requestBody, { timeout: aiTimeout || 180000, recoverable: true });
             setData(prev => ({
@@ -160,10 +162,14 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* 左侧：编辑区 */}
                 <div className="space-y-6">
-                    {imagePreview && (
+                    {(imagePreviews?.length || imagePreview) && (
                         <Card>
                             <CardContent className="p-4">
-                                <img src={imagePreview} alt="Original" className="w-full rounded-md" />
+                                <div className="space-y-3">
+                                    {(imagePreviews?.length ? imagePreviews : [imagePreview!]).map((src, index) => (
+                                        <img key={index} src={src} alt={`${t.detail.originalProblem} ${index + 1}`} className="w-full rounded-md" />
+                                    ))}
+                                </div>
                             </CardContent>
                         </Card>
                     )}

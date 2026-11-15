@@ -62,8 +62,49 @@ describe('AI Prompts', () => {
         it('单独重绘配图的提示词带上题干用于核对标注', () => {
             const prompt = generateFigurePrompt('如图，AB=3');
             expect(prompt).toContain('如图，AB=3');
+            expect(prompt).toContain('<figure_spec>');
+            expect(prompt).toContain('vertical_arithmetic');
+            expect(prompt).toContain('arcType');
+            expect(prompt).toContain('through');
+            expect(prompt).toContain('figure_group');
+            expect(prompt).toContain('figures 必须按原题顺序完整列出');
+            expect(prompt).toContain('compareSizes:true');
+            expect(prompt).toContain('compareSizes 是可选布尔值，默认 false');
+            expect(prompt).toContain('不能跨子图引用点');
+            expect(prompt).toContain('3.4×25 不能截成4×25');
+            expect(prompt).toContain('分数斜线不能直接当作除法');
+            expect(prompt).toContain('figure_spec 留空');
             expect(prompt).toContain('<figure_svg>');
             expect(generateFigurePrompt(null)).toContain('（无题目文字）');
+        });
+
+        it('重绘和新题配图共用圆的明确长度约束，不推断缺失单位', () => {
+            const prompts = [
+                generateFigurePrompt('如图，半径为3cm，弦AC长4cm'),
+                generateSimilarQuestionPrompt('zh', '如图求弦长', ['圆'], 'medium'),
+            ];
+            for (const prompt of prompts) {
+                expect(prompt).toContain('弦长不能超过直径或半径的两倍');
+                expect(prompt).toContain('同一对端点无论顺序如何');
+                expect(prompt).toContain('无单位值只和其它无单位值比较');
+                expect(prompt).toContain('未知值不能遮住已知长度间的矛盾');
+                expect(prompt).toContain('不得根据相对绘图半径、弦的角度或坐标比例推算实际长度');
+                expect(prompt).toContain('对齐后仍不能重合或形成零长度弦');
+                expect(prompt).toContain('直径两端在对齐后仍须经过圆心');
+                expect(prompt).toContain('不能为通过校验而合并点名、删除线段或移动端点');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图区分主图声明与后续提问（%s）', (language) => {
+            const prompts = [
+                generateFigurePrompt('下图是一个正方形，面积是多少？'),
+                generateSimilarQuestionPrompt(language, '下图是一个正方形，求面积。', ['面积'], 'medium'),
+            ];
+            for (const prompt of prompts) {
+                expect(prompt).toContain('声明之后的面积、周长或体积求值提问不能取消前面的明确形状条件');
+                expect(prompt).toContain('不能因整题带问号而跳过形状核对');
+                expect(prompt).toContain('形状疑问、命题判断、待证明、假设条件或引用内容不作为既定事实');
+            }
         });
 
         it('提供错题本候选知识点时只列出这些标签，不再按学科、年级取标签', () => {
@@ -91,6 +132,13 @@ describe('AI Prompts', () => {
         it('应该包含学科提示（如果提供）', () => {
             const prompt = generateAnalyzePrompt('zh', null, '数学');
             expect(prompt).toContain('数学');
+        });
+
+        it('多小题答案优先使用同一行分号或空格分隔，不默认换行', () => {
+            const prompt = generateAnalyzePrompt('zh', null, '英语');
+            expect(prompt).toContain('优先使用英文半角分号（;）');
+            expect(prompt).toContain('其次在同一行使用一个空格');
+            expect(prompt).toContain('只有答案确实需要分段时才换行');
         });
 
         it('应该根据年级过滤数学标签（初一）', () => {
@@ -455,6 +503,14 @@ describe('AI Prompts', () => {
             const prompt = generateAnalyzePrompt('zh');
             expect(prompt).toContain('<analysis>');
             expect(prompt).toMatch(/<analysis>[\s\S]*表格处理规则[\s\S]*<\/analysis>/);
+        });
+    });
+
+    describe('LaTeX 答案排版指令', () => {
+        it('要求独立公式使用独占行定界符并把中文标点放在公式外', () => {
+            const prompt = generateSimilarQuestionPrompt('zh', '计算 1+1', ['加法']);
+            expect(prompt).toContain('开头 $$ 和结尾 $$ 各自独占一行');
+            expect(prompt).toContain('中文句号、逗号、分号等标点不要写进 $$...$$');
         });
     });
 });

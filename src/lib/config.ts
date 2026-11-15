@@ -8,8 +8,11 @@ import type { VendorConfig, VendorProviderId } from './ai/vendor-presets';
 import type { MiniMaxCodeConfig } from './minimax-code/constants';
 import { CLOUD_TTS_PROVIDERS, isTtsMode } from './tts/constants';
 import type { TtsConfig } from './tts/constants';
+import { DEFAULT_AI_TIMEOUT_MS } from './ai-timeout';
 
 const logger = createLogger('config');
+/** 旧版默认值；升级后不再让已有默认配置把 AI 请求限制在 3 分钟。 */
+const LEGACY_DEFAULT_AI_TIMEOUT_MS = 180000;
 
 // 安装包（npm、桌面端、飞牛OS）通过 CONFIG_DIR 把配置放到用户数据目录，默认仍为 ./config
 const CONFIG_FILE_PATH = path.join(process.env.CONFIG_DIR || path.join(process.cwd(), 'config'), 'app-config.json');
@@ -178,7 +181,7 @@ const DEFAULT_CONFIG: AppConfig = {
         similar: '',
     },
     timeouts: {
-        analyze: 180000,
+        analyze: DEFAULT_AI_TIMEOUT_MS,
     },
 };
 
@@ -238,7 +241,15 @@ export function getAppConfig(): AppConfig {
                 logger.info('Legacy OpenAI config migrated successfully');
             }
 
-            // Merge with default to ensure all fields exist
+            // Merge with default to ensure all fields exist. The old 180-second
+            // default is migrated in memory so existing installations also get
+            // the new ten-minute budget without touching any other setting.
+            const storedAnalyzeTimeout = userConfig.timeouts?.analyze;
+            const mergedTimeouts = {
+                ...DEFAULT_CONFIG.timeouts,
+                ...userConfig.timeouts,
+                ...(storedAnalyzeTimeout === LEGACY_DEFAULT_AI_TIMEOUT_MS ? { analyze: DEFAULT_AI_TIMEOUT_MS } : {}),
+            };
             return {
                 ...DEFAULT_CONFIG,
                 ...userConfig,
@@ -253,7 +264,7 @@ export function getAppConfig(): AppConfig {
                 minimaxCode: { ...DEFAULT_CONFIG.minimaxCode, ...userConfig.minimaxCode },
                 ...mergeVendorConfigs(DEFAULT_CONFIG, userConfig),
                 prompts: { ...DEFAULT_CONFIG.prompts, ...userConfig.prompts },
-                timeouts: { ...DEFAULT_CONFIG.timeouts, ...userConfig.timeouts },
+                timeouts: mergedTimeouts,
                 tts: mergeTtsConfig(DEFAULT_CONFIG.tts, userConfig.tts),
             };
         } catch (error) {

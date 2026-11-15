@@ -10,12 +10,18 @@ import type { CandidateTags, GradeLevel } from "@/lib/ai/types";
 import { getNotebookCandidateTags } from "@/lib/ai/tag-service";
 import { resolveNotebookScope, SUBJECT_DISPLAY_NAMES } from "@/lib/notebook-scope";
 import { createLogger } from "@/lib/logger";
-import { isBackgroundTaskReplay, trackBackgroundTask } from "@/lib/background-tasks";
+import { awaitBackgroundTaskImport, BACKGROUND_TASK_REPLAY_ID_HEADER, isBackgroundTaskReplay, trackBackgroundTask } from "@/lib/background-tasks";
+import type { BackgroundTaskHandle } from '@/lib/background-tasks';
 import { getAppTimeZone } from "@/lib/config";
 import { getErrorMessage } from "@/lib/error-message";
 import { consumeAiQuota } from "@/lib/ai-quota";
-import { updateStoredResponseProgressFromRequest, withRecoverableResponse } from "@/lib/recoverable-response";
+import { parseRequestId, REQUEST_ID_HEADER, updateStoredResponseProgressFromRequest, withRecoverableResponse } from "@/lib/recoverable-response";
+import { POST as saveErrorItem } from '@/app/api/error-items/route';
+import { buildQuestionImportPayload } from '@/lib/question-import-payload';
+import { DEFAULT_AI_TIMEOUT_MS } from '@/lib/ai-timeout';
 import type { RequestProgress } from "@/lib/request-progress";
+import { parseImageInput, questionImagesSchema } from '@/lib/ai/image-input';
+import type { AIImageInput } from '@/lib/ai/image-input';
 
 const logger = createLogger('api:analyze');
 
@@ -36,7 +42,16 @@ async function handlePost(req: Request) {
     try {
         const body = await req.json();
         const { language, subjectId } = body;
-        let { imageBase64, mimeType } = body;
+        if (body.images === undefined && !body.imageBase64) return badRequest('Missing image data');
+        const imageList = questionImagesSchema.safeParse(body.images ?? [body.imageBase64]);
+        if (!imageList.success) return badRequest('Invalid or missing image data');
+        let images: AIImageInput[];
+        try {
+            images = imageList.data.map(image => parseImageInput(image, body.mimeType));
+        } catch {
+            return badRequest('Invalid image data URL');
+        }
+        const [{ base64: imageBase64, mimeType }] = images;
 
         logger.debug({
             imageLength: imageBase64?.length,
@@ -48,16 +63,6 @@ async function handlePost(req: Request) {
         if (!imageBase64) {
             logger.warn('Missing image data');
             return badRequest("Missing image data");
-        }
-
-        // Parse Data URL if present
-        if (imageBase64.startsWith('data:')) {
-            const matches = imageBase64.match(/^data:([^;]+);base64,(.+)$/);
-            if (matches) {
-                mimeType = matches[1];
-                imageBase64 = matches[2];
-                logger.debug({ mimeType, base64Length: imageBase64.length }, 'Parsed Data URL');
-            }
         }
 
         // 先获取用户年级信息，用于动态生成 AI prompt 中的标签列表
@@ -111,24 +116,53 @@ async function handlePost(req: Request) {
         if (limited) return limited;
 
         updateProgress({ stage: 'thinking', percent: 25 });
-        const aiService = getAIService({ onProgress: updateProgress });
-        const analyze = () => aiService.analyzeImage(imageBase64, mimeType, language, userGrade, subjectChinese, userGradeSemester, candidateTags);
         const defaultReturnPath = subjectId ? `/notebooks/${encodeURIComponent(subjectId)}/add` : '/';
         const returnPath = typeof body.returnPath === 'string' && body.returnPath.startsWith('/') && !body.returnPath.startsWith('//') && !body.returnPath.includes('\\')
             && new URL(body.returnPath, 'http://localhost').origin === 'http://localhost'
             ? body.returnPath
             : defaultReturnPath;
         const retryReplay = isBackgroundTaskReplay(req);
+        const analyze = async (task?: BackgroundTaskHandle) => {
+            const aiService = getAIService({ onProgress: updateProgress });
+            const result = await aiService.analyzeImage(imageBase64, mimeType, language, userGrade, subjectChinese, userGradeSemester, candidateTags, ...(images.length > 1 ? [images.slice(1)] : []));
+            if (!result.questionText?.trim() || !result.answerText?.trim() || !result.analysis?.trim()) {
+                throw new Error('AI_RESPONSE_ERROR');
+            }
+            const importTaskId = task?.id || req.headers.get(BACKGROUND_TASK_REPLAY_ID_HEADER) || undefined;
+            const parsed = {
+                ...result,
+                ...(gradeProfile ? { gradeSemester: resolveQuestionGrade(gradeProfile, { recognizedGradeSemester: result.gradeSemester }, getAppTimeZone()) } : {}),
+                ...(importTaskId ? { importTaskId } : {}),
+            };
+            if (importTaskId) awaitBackgroundTaskImport(session.user.id, importTaskId, parsed, body.confirmBeforeImport === true);
+            if (body.autoSave === true && body.confirmBeforeImport !== true) {
+                updateProgress({ stage: 'saving', percent: 95 });
+                const saved = await saveErrorItem(new Request(new URL('/api/error-items', req.url), {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json', cookie: req.headers.get('cookie') || '' },
+                    body: JSON.stringify(buildQuestionImportPayload(parsed, { subjectId, imageUrls: imageList.data })),
+                }));
+                const savedBody = await saved.json();
+                if (!saved.ok || !savedBody?.id) throw new Error(savedBody?.message || 'QUESTION_SAVE_FAILED');
+                return { ...parsed, importedQuestion: {
+                    id: savedBody.id, shortId: savedBody.shortId ?? null, subjectId: savedBody.subjectId ?? null,
+                    notebookName: savedBody.subject?.name ?? null, ...(savedBody.duplicate ? { duplicate: true } : {}),
+                } };
+            }
+            return parsed;
+        };
         const analysisResult = retryReplay ? await analyze() : await trackBackgroundTask(
             {
                 userId: session.user.id,
                 kind: 'analyze',
                 subject: notebookName,
                 link: returnPath,
+                requestId: parseRequestId(req.headers.get(REQUEST_ID_HEADER)) ?? undefined,
+                completeOnImport: true,
                 retryRequest: {
                     path: '/api/analyze',
-                    body: { imageBase64, mimeType, language, subjectId: subjectId || undefined, confirmBeforeImport: body.confirmBeforeImport === true, returnPath },
-                    timeoutMs: 180000,
+                    body: { ...(images.length > 1 ? { images: imageList.data } : { imageBase64, mimeType }), language, subjectId: subjectId || undefined, autoSave: body.autoSave === true, confirmBeforeImport: body.confirmBeforeImport === true, returnPath },
+                    timeoutMs: DEFAULT_AI_TIMEOUT_MS,
                 },
             },
             analyze
@@ -150,10 +184,7 @@ async function handlePost(req: Request) {
         // AI 分析已经完成，但浏览器还需要整理并保存结果；最终完成状态由前端导入流程确认。
         updateProgress({ stage: 'collecting', percent: 90 });
 
-        return NextResponse.json(gradeProfile ? {
-            ...analysisResult,
-            gradeSemester: resolveQuestionGrade(gradeProfile, { recognizedGradeSemester: analysisResult.gradeSemester }, getAppTimeZone()),
-        } : analysisResult);
+        return NextResponse.json(analysisResult);
     } catch (error) {
         const message = getErrorMessage(error);
         logger.error({

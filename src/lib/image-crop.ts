@@ -62,7 +62,7 @@ export async function createRotatedImagePreview(src: string, rotation: ImageRota
     context.fillRect(0, 0, rotatedWidth, rotatedHeight);
     context.translate(
         rotation === 90 ? rotatedWidth : rotation === 180 ? rotatedWidth : 0,
-        rotation === 90 || rotation === 180 ? rotatedHeight : rotation === 270 ? rotatedHeight : 0,
+        rotation === 180 || rotation === 270 ? rotatedHeight : 0,
     );
     context.rotate((rotation * Math.PI) / 180);
     context.drawImage(image, 0, 0, width, height);

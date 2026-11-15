@@ -6,7 +6,7 @@ import type { NarrationSegment } from '../svg-animation';
 import { parseLatexFix } from './latex-fix';
 import type { LatexFixInput, LatexFixResult } from './latex-fix';
 import { getAppConfig } from '../config';
-import { parseGradeRecognition, safeParseParsedQuestion, parseMasteryEvaluation, parseAnswerGrading, normalizeSubject, parseTagSuggestion, extractJsonObject, parseDifficultyStars, parseFigure, stripThinkingTags } from './schema';
+import { parseGradeRecognition, safeParseParsedQuestion, parseMasteryEvaluation, parseAnswerGrading, normalizeSubject, parseTagSuggestion, extractJsonObject, parseDifficultyStars, parseFigure, stripThinkingTags, normalizeAnswerText } from './schema';
 import { prefetchSubjectTags } from './tag-service';
 import { createLogger } from '../logger';
 import { trimTrailingSlashes } from '../utils';
@@ -15,6 +15,9 @@ import { normalizeMistakeStatusForSave } from '../mistake-status';
 import { parseRecognizedGrade } from '../question-grade';
 import { normalizeGeneratedQuestion } from './generated-question';
 import { normalizeAiQuestionTags } from './knowledge-points';
+import { DEFAULT_AI_TIMEOUT_MS } from '../ai-timeout';
+import { getAIRequestSignal } from './request-deadline';
+import type { AIImageInput } from './image-input';
 
 const logger = createLogger('ai:anthropic');
 
@@ -22,7 +25,7 @@ export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-5-5';
 
 // 显式指定请求超时：SDK 在未指定超时且 max_tokens 较大时会拒绝非流式请求
-const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = DEFAULT_AI_TIMEOUT_MS;
 
 type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 type UserContent = string | Anthropic.ContentBlockParam[];
@@ -76,7 +79,7 @@ function splitKnowledgePoints(raw: string | null): string[] {
 
 function parseQuestionResponse(text: string, includeFigureSvg = false): ParsedQuestion {
     const questionText = extractTag(text, "question_text");
-    const answerText = extractTag(text, "answer_text");
+    const answerText = normalizeAnswerText(extractTag(text, "answer_text") || '', questionText);
     const analysis = extractTag(text, "analysis");
     if (!questionText || !answerText || !analysis) {
         logger.error({ rawTextSample: text.substring(0, 500) }, 'Missing critical XML tags');
@@ -98,7 +101,7 @@ function parseQuestionResponse(text: string, includeFigureSvg = false): ParsedQu
         gradeSemester: parseRecognizedGrade(extractTag(text, "grade_semester")),
         difficultyStars: parseDifficultyStars(extractTag(text, "difficulty_stars")),
         ...(includeFigureSvg
-            ? parseFigure(extractTag(text, "has_figure"), extractTag(text, "figure_svg"))
+            ? parseFigure(extractTag(text, "has_figure"), extractTag(text, "figure_svg"), extractTag(text, "figure_spec"), questionText)
             : parseFigure(extractTag(text, "has_figure"), null)),
     };
 
@@ -129,7 +132,7 @@ function isOfficialAnthropicHost(baseURL: string): boolean {
  * authToken（OAuth 登录的渠道）始终以 Authorization: Bearer 发送。
  */
 export function createAnthropicClient(baseURL: string, apiKey?: string, authToken?: string): Anthropic {
-    const options = { baseURL, timeout: REQUEST_TIMEOUT_MS };
+    const options = { baseURL, timeout: REQUEST_TIMEOUT_MS, maxRetries: 0 };
     if (isOfficialAnthropicHost(baseURL)) {
         return apiKey
             ? new Anthropic({ ...options, apiKey, authToken: null })
@@ -179,7 +182,7 @@ export class AnthropicProvider implements AIService {
                 max_tokens: limit,
                 system,
                 messages: [{ role: 'user', content }],
-            });
+            }, { signal: getAIRequestSignal() });
             // 兼容接口的推理模型会返回 thinking 块，只取正文
             const text = message.content
                 .filter((block): block is Anthropic.TextBlock => block.type === 'text')
@@ -196,7 +199,7 @@ export class AnthropicProvider implements AIService {
         return response.text;
     }
 
-    async analyzeImage(imageBase64: string, mimeType: string = "image/jpeg", language: 'zh' | 'en' = 'zh', grade?: GradeLevel | null, subject?: string | null, gradeSemester?: string | null, candidateTags?: CandidateTags): Promise<ParsedQuestion> {
+    async analyzeImage(imageBase64: string, mimeType: string = "image/jpeg", language: 'zh' | 'en' = 'zh', grade?: GradeLevel | null, subject?: string | null, gradeSemester?: string | null, candidateTags?: CandidateTags, additionalImages: AIImageInput[] = []): Promise<ParsedQuestion> {
         const config = getAppConfig();
         const tagOptions = candidateTags ? { candidateTags } : await prefetchSubjectTags(subject, grade);
         const systemPrompt = generateAnalyzeRequest(language, grade, subject, {
@@ -219,6 +222,7 @@ export class AnthropicProvider implements AIService {
         try {
             const text = await this.complete(systemPrompt.system, [
                 imageBlock(imageBase64, mimeType),
+                ...additionalImages.map(image => imageBlock(image.base64, image.mimeType)),
                 { type: 'text', text: systemPrompt.user },
             ], 8192);
             logger.box('🤖 AI Raw Response', text);
@@ -253,7 +257,7 @@ export class AnthropicProvider implements AIService {
         }
     }
 
-    async reanswerQuestion(questionText: string, language: 'zh' | 'en' = 'zh', subject?: string | null, imageBase64?: string, gradeSemester?: string | null, candidateTags?: CandidateTags): Promise<ReanswerQuestionResult> {
+    async reanswerQuestion(questionText: string, language: 'zh' | 'en' = 'zh', subject?: string | null, imageBase64?: string, gradeSemester?: string | null, candidateTags?: CandidateTags, additionalImages: AIImageInput[] = []): Promise<ReanswerQuestionResult> {
         const prompt = generateReanswerRequest(language, questionText, subject, { candidateTags }, gradeSemester);
 
         logger.info({
@@ -266,14 +270,14 @@ export class AnthropicProvider implements AIService {
 
         try {
             const content: UserContent = imageBase64
-                ? [imageBlock(imageBase64), { type: 'text', text: prompt.user }]
+                ? [imageBlock(imageBase64), ...additionalImages.map(image => imageBlock(image.base64, image.mimeType)), { type: 'text', text: prompt.user }]
                 : prompt.user;
             const text = await this.complete(prompt.system, content, 8192);
             logger.debug({ rawResponse: text }, 'AI raw response');
 
             const wrongAnswerText = extractTag(text, "wrong_answer_text") || "";
             return normalizeAiQuestionTags({
-                answerText: extractTag(text, "answer_text") || "",
+                answerText: normalizeAnswerText(extractTag(text, "answer_text") || "", questionText),
                 analysis: extractTag(text, "analysis") || "",
                 knowledgePoints: splitKnowledgePoints(extractTag(text, "knowledge_points")),
                 wrongAnswerText,
@@ -374,17 +378,19 @@ export class AnthropicProvider implements AIService {
         }
     }
 
-    async generateFigureSvg(imageBase64: string, mimeType: string, questionText?: string | null): Promise<FigureResult> {
+    async generateFigureSvg(imageBase64: string, mimeType: string, questionText?: string | null, additionalImages: AIImageInput[] = []): Promise<FigureResult> {
         const prompt = generateFigureRequest(questionText);
         logger.info({ provider: 'Anthropic', model: this.model, imageSize: imageBase64.length }, 'Figure SVG Request');
 
         try {
             const text = await this.complete(prompt.system, [
-                imageBlock(imageBase64, mimeType), { type: 'text', text: prompt.user },
+                imageBlock(imageBase64, mimeType),
+                ...additionalImages.map((image) => imageBlock(image.base64, image.mimeType)),
+                { type: 'text', text: prompt.user },
                 { type: 'text', text: '请重新绘制图中题目的配图。' },
             ], 8192);
             logger.debug({ rawResponse: text }, 'Figure SVG AI raw response');
-            return parseFigure(extractTag(text, "has_figure"), extractTag(text, "figure_svg"));
+            return parseFigure(extractTag(text, "has_figure"), extractTag(text, "figure_svg"), extractTag(text, "figure_spec"), questionText);
         } catch (error) {
             logger.error({ error, stack: error instanceof Error ? error.stack : undefined }, 'Error during figure SVG generation');
             this.handleError(error);

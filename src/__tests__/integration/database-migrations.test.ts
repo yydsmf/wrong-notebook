@@ -76,6 +76,9 @@ function seedLegacyData() {
 
 function expectConstraints() {
     expect(database!.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    for (const table of ['ErrorItem', 'PracticeRecord']) {
+        expect(database!.prepare(`PRAGMA table_info("${table}")`).all()).toContainEqual(expect.objectContaining({ name: 'originalImageUrls', type: 'TEXT', notnull: 0 }));
+    }
     expect(database!.prepare('PRAGMA foreign_key_list("ErrorItem")').all())
         .toContainEqual(expect.objectContaining({ table: 'PaperGroup', from: 'paperLevel', on_delete: 'SET NULL' }));
     expect(database!.prepare('PRAGMA index_list("ErrorItem")').all().map((index) => index.name))
@@ -149,10 +152,11 @@ describe('真实 Prisma 数据库迁移', () => {
         openDatabase();
         seedLegacyData();
         if (hasScale) database!.exec('UPDATE "ErrorItem" SET figureScale=65');
-        const beforeItems: DatabaseRow[] = rows('ErrorItem').map((item) => ({ ...item, figureDescription: null, imageFragments: null }));
+        const beforeItems: DatabaseRow[] = rows('ErrorItem').map((item) => ({ ...item, figureDescription: null, imageFragments: null, originalImageUrls: null }));
         const beforeRelated = relatedTables.map((table) => rows(table).map((row) => {
             if (table === 'Subject' || table === 'KnowledgeTag') return { ...row, tagSet: row.tagSet ?? 'default' };
             if (table === 'ExamQuestion') return { ...row, figureScale: row.figureScale ?? 100, figureAlign: row.figureAlign ?? 'center', answerSpacePx: null };
+            if (table === 'PracticeRecord') return { ...row, originalImageUrls: null };
             return row;
         }));
         closeDatabase();
@@ -189,7 +193,7 @@ describe('真实 Prisma 数据库迁移', () => {
             INSERT INTO "ErrorItem" (id, userId, originalImageUrl, paperLevel, figureScale, updatedAt)
                 VALUES ('existing-item', 'existing-user', 'original', 'custom-group', 175, '2026-10-01');
         `);
-        const beforeItems = rows('ErrorItem').map((item) => ({ ...(item as Record<string, unknown>), figureDescription: null, imageFragments: null, figureAlign: 'center', answerSpacePx: null }));
+        const beforeItems = rows('ErrorItem').map((item) => ({ ...(item as Record<string, unknown>), figureDescription: null, imageFragments: null, figureAlign: 'center', answerSpacePx: null, originalImageUrls: null }));
         const beforeGroups = rows('PaperGroup');
         closeDatabase();
 

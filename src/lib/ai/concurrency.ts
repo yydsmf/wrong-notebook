@@ -7,6 +7,7 @@
 import { parseConcurrencyLimit } from '../ai-concurrency-limit';
 import { getAppConfig } from '../config';
 import { createLogger } from '../logger';
+import { getAIRequestSignal } from './request-deadline';
 
 const logger = createLogger('ai:concurrency');
 
@@ -63,6 +64,7 @@ function release(key: string): void {
 export async function runWithModelConcurrency<T>(key: string, task: () => Promise<T>): Promise<T> {
     await acquire(key);
     try {
+        getAIRequestSignal()?.throwIfAborted();
         return await task();
     } finally {
         release(key);

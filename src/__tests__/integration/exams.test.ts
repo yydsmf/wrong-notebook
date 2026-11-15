@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
             Array.isArray(arg) ? Promise.all(arg) : arg(tx)
         )),
         generateSimilarQuestion: vi.fn(),
+        generateFigureSvg: vi.fn(),
         reanswerQuestion: vi.fn(),
         scheduleMasteryEvaluation: vi.fn(),
         session: { user: { email: 'user@example.com' }, expires: '2099-01-01' },
@@ -38,7 +39,7 @@ vi.mock('@/lib/prisma', () => ({
         $transaction: mocks.transaction,
     },
 }));
-vi.mock('@/lib/ai', () => ({ getAIService: vi.fn(() => ({ generateSimilarQuestion: mocks.generateSimilarQuestion, reanswerQuestion: mocks.reanswerQuestion })) }));
+vi.mock('@/lib/ai', () => ({ getAIService: vi.fn(() => ({ generateSimilarQuestion: mocks.generateSimilarQuestion, generateFigureSvg: mocks.generateFigureSvg, reanswerQuestion: mocks.reanswerQuestion })) }));
 vi.mock('@/lib/mastery', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/lib/mastery')>()),
     scheduleMasteryEvaluation: mocks.scheduleMasteryEvaluation,
@@ -350,6 +351,7 @@ describe('/api/exams', () => {
             paper: { userId: 'user-1', title: '试卷', difficulty: 'hard' },
             errorItem: {
                 questionText: '原题', knowledgePoints: null, gradeSemester: '初二上', figureSvg: null,
+                hasFigure: false, figureDescription: null, originalImageUrl: null, originalImageUrls: null,
                 tags: [{ name: '函数' }], subject: { name: '数学', stage: 'junior_high', subjectKey: 'math' },
             },
             _count: { practiceRecords: practiceCount },
@@ -375,6 +377,76 @@ describe('/api/exams', () => {
                 },
             });
             expect(mocks.examPaper.update).toHaveBeenCalledWith({ where: { id: 'p1' }, data: { status: 'ready' } });
+        });
+
+        it('重新生成试卷题目时基于原图和新题题干另外绘制配图', async () => {
+            const sourceImage = 'data:image/png;base64,QQ==';
+            mocks.examQuestion.findUnique
+                .mockResolvedValueOnce({
+                    ...question(0),
+                    errorItem: {
+                        ...question(0).errorItem,
+                        questionText: '观察两位数乘25的乘法竖式',
+                        hasFigure: false,
+                        originalImageUrl: sourceImage,
+                        originalImageUrls: JSON.stringify([sourceImage]),
+                    },
+                })
+                .mockResolvedValueOnce(regenerated);
+            mocks.generateSimilarQuestion.mockResolvedValue({ questionText: '新题中观察新竖式', answerText: '答', analysis: '析', figureSvg: null });
+            mocks.generateFigureSvg.mockResolvedValue({ hasFigure: true, figureSvg: '<svg>新图</svg>' });
+            mocks.examQuestion.updateMany.mockResolvedValue({ count: 1 });
+            mocks.examQuestion.findMany.mockResolvedValue([{ status: 'ready' }]);
+
+            const response = await regenerate({ mode: 'question', language: 'zh' });
+
+            expect(response.status).toBe(200);
+            expect(mocks.generateFigureSvg).toHaveBeenCalledWith('QQ==', 'image/png', '新题中观察新竖式', []);
+            expect(mocks.examQuestion.updateMany.mock.calls[0][0].data.figureSvg).toBe('<svg>新图</svg>');
+        });
+
+        it('AI重新生成配图时仅更新当前试卷题目的 SVG，允许已经有作答记录', async () => {
+            const source = {
+                ...question(2),
+                questionText: '观察新题的竖式',
+                errorItem: {
+                    ...question(2).errorItem,
+                    originalImageUrl: 'data:image/png;base64,QQ==',
+                    originalImageUrls: JSON.stringify(['data:image/png;base64,QQ==', 'data:image/jpeg;base64,Qg==']),
+                },
+            };
+            mocks.examQuestion.findUnique.mockResolvedValueOnce(source).mockResolvedValueOnce({ ...regenerated, figureSvg: '<svg>新图</svg>' });
+            mocks.generateFigureSvg.mockResolvedValue({ hasFigure: true, figureSvg: '<svg>新图</svg>' });
+            mocks.examQuestion.updateMany.mockResolvedValue({ count: 1 });
+
+            const response = await regenerate({ mode: 'figure', language: 'zh' });
+
+            expect(response.status).toBe(200);
+            expect(mocks.generateFigureSvg).toHaveBeenCalledWith(
+                'QQ==', 'image/png', '观察新题的竖式', [{ base64: 'Qg==', mimeType: 'image/jpeg' }],
+            );
+            expect(mocks.examQuestion.updateMany).toHaveBeenCalledWith({
+                where: { id: 'q1', paperId: 'p1', status: 'ready', questionText: '观察新题的竖式' },
+                data: { figureSvg: '<svg>新图</svg>' },
+            });
+            expect(mocks.practiceRecord.updateMany).not.toHaveBeenCalled();
+        });
+
+        it('没有原题图片或 AI 未生成有效 SVG 时保留原图且返回明确错误', async () => {
+            mocks.examQuestion.findUnique.mockResolvedValueOnce(question(0));
+            const noImageResponse = await regenerate({ mode: 'figure' });
+            expect(noImageResponse.status).toBe(400);
+            expect((await noImageResponse.json()).message).toBe('NO_ORIGINAL_IMAGE');
+
+            mocks.examQuestion.findUnique.mockResolvedValueOnce({
+                ...question(0),
+                errorItem: { ...question(0).errorItem, originalImageUrl: 'data:image/png;base64,QQ==' },
+            });
+            mocks.generateFigureSvg.mockResolvedValue({ hasFigure: false, figureSvg: null });
+            const noSvgResponse = await regenerate({ mode: 'figure' });
+            expect(noSvgResponse.status).toBe(400);
+            expect((await noSvgResponse.json()).message).toBe('NO_FIGURE_GENERATED');
+            expect(mocks.examQuestion.updateMany).not.toHaveBeenCalled();
         });
 
         it('已录入结果时不能重新生成题目', async () => {

@@ -11,6 +11,7 @@ export interface ImportedQuestionContent {
     wrongAnswerText?: string | null;
     mistakeAnalysis?: string | null;
     originalImageUrl?: string | null;
+    originalImageUrls?: string | null;
 }
 
 interface DuplicateQuestion {
@@ -80,6 +81,7 @@ export async function recordDuplicateQuestion(
             wrongAnswerText: content.wrongAnswerText || null,
             mistakeAnalysis: content.mistakeAnalysis || null,
             originalImageUrl: content.originalImageUrl || null,
+            originalImageUrls: content.originalImageUrls || null,
         },
     });
     return {

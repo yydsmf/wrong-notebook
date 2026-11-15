@@ -1,4 +1,5 @@
 import { AzureOpenAI } from "openai";
+import type { AIImageInput } from './image-input';
 import type { ChatCompletion, ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import type { AIService, GradeLevel, ParsedQuestion, DifficultyLevel, ReanswerQuestionResult, GeogebraAnalysisResult, MasteryEvaluationInput, MasteryEvaluationResult, AnswerGradingInput, AnswerGradingResult, TagSuggestionInput, TagSuggestionResult, CandidateTags, FigureResult } from "./types";
 import { generateGradeRecognitionRequest, generateAnalyzeRequest, generateSimilarQuestionRequest, generateReanswerRequest, generateGeogebraRequest, generateMasteryRequest, generateGradingRequest, generateTagSuggestRequest, generateFigureRequest, generateSvgAnimationRequest, generateSvgNarrationRequest, generateLatexFixRequest } from './prompt-requests';
@@ -7,7 +8,7 @@ import type { NarrationSegment } from '../svg-animation';
 import { parseLatexFix } from './latex-fix';
 import type { LatexFixInput, LatexFixResult } from './latex-fix';
 import { getAppConfig } from '../config';
-import { parseGradeRecognition, safeParseParsedQuestion, parseMasteryEvaluation, parseAnswerGrading, normalizeSubject, parseTagSuggestion, parseDifficultyStars, parseFigure, stripThinkingTags } from './schema';
+import { parseGradeRecognition, safeParseParsedQuestion, parseMasteryEvaluation, parseAnswerGrading, normalizeSubject, parseTagSuggestion, parseDifficultyStars, parseFigure, stripThinkingTags, normalizeAnswerText } from './schema';
 import { prefetchSubjectTags } from './tag-service';
 import { createLogger } from '../logger';
 import { AI_OUTPUT_TRUNCATED, withTruncationRetry } from './truncation';
@@ -15,6 +16,8 @@ import { normalizeMistakeStatusForSave } from '../mistake-status';
 import { parseRecognizedGrade } from '../question-grade';
 import { normalizeGeneratedQuestion } from './generated-question';
 import { normalizeAiQuestionTags } from './knowledge-points';
+import { DEFAULT_AI_TIMEOUT_MS } from '../ai-timeout';
+import { getAIRequestSignal } from './request-deadline';
 
 const logger = createLogger('ai:azure');
 
@@ -43,7 +46,7 @@ export class AzureOpenAIProvider implements AIService {
         const response = await this.client.chat.completions.create({
             ...params,
             reasoning_effort: GLOBAL_REASONING_EFFORT,
-        });
+        }, { signal: getAIRequestSignal() });
         const usage = response.usage as (typeof response.usage & {
             completion_tokens_details?: { reasoning_tokens?: number | null } | null;
         }) | undefined;
@@ -79,6 +82,8 @@ export class AzureOpenAIProvider implements AIService {
 
         this.client = new AzureOpenAI({
             apiKey: apiKey,
+            timeout: DEFAULT_AI_TIMEOUT_MS,
+            maxRetries: 0,
             endpoint: endpoint,
             deployment: deployment,
             apiVersion: config?.apiVersion || '2024-02-15-preview',
@@ -115,7 +120,7 @@ export class AzureOpenAIProvider implements AIService {
         logger.debug({ textLength: text.length }, 'Parsing AI response');
 
         const questionText = this.extractTag(text, "question_text");
-        const answerText = this.extractTag(text, "answer_text");
+        const answerText = normalizeAnswerText(this.extractTag(text, "answer_text") || '', questionText);
         const analysis = this.extractTag(text, "analysis");
         const subjectRaw = this.extractTag(text, "subject");
         const knowledgePointsRaw = this.extractTag(text, "knowledge_points");
@@ -163,7 +168,7 @@ export class AzureOpenAIProvider implements AIService {
             gradeSemester: parseRecognizedGrade(this.extractTag(text, "grade_semester")),
             difficultyStars: parseDifficultyStars(this.extractTag(text, "difficulty_stars")),
             ...(includeFigureSvg
-                ? parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"))
+                ? parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"), this.extractTag(text, "figure_spec"), questionText)
                 : parseFigure(this.extractTag(text, "has_figure"), null)),
         };
 
@@ -185,7 +190,8 @@ export class AzureOpenAIProvider implements AIService {
         grade?: GradeLevel | null,
         subject?: string | null,
         gradeSemester?: string | null,
-        candidateTags?: CandidateTags
+        candidateTags?: CandidateTags,
+        additionalImages: AIImageInput[] = []
     ): Promise<ParsedQuestion> {
         const config = getAppConfig();
 
@@ -220,12 +226,10 @@ export class AzureOpenAIProvider implements AIService {
                         role: "user",
                         content: [
                             { type: "text", text: systemPrompt.user },
-                            {
-                                type: "image_url",
-                                image_url: {
-                                    url: `data:${mimeType};base64,${imageBase64}`,
-                                },
-                            },
+                            ...[{ base64: imageBase64, mimeType }, ...additionalImages].map(image => ({
+                                type: 'image_url' as const,
+                                image_url: { url: `data:${image.mimeType};base64,${image.base64}` },
+                            })),
                         ],
                     },
                 ],
@@ -338,7 +342,8 @@ export class AzureOpenAIProvider implements AIService {
         subject?: string | null,
         imageBase64?: string,
         gradeSemester?: string | null,
-        candidateTags?: CandidateTags
+        candidateTags?: CandidateTags,
+        additionalImages: AIImageInput[] = []
     ): Promise<ReanswerQuestionResult> {
         const prompt = generateReanswerRequest(language, questionText, subject, { candidateTags }, gradeSemester);
 
@@ -362,7 +367,8 @@ export class AzureOpenAIProvider implements AIService {
                 logger.debug({ imageLength: imageUrl.length }, 'Image added to request');
                 userContent = [
                     { type: "text", text: prompt.user },
-                    { type: "image_url", image_url: { url: imageUrl } }
+                    { type: "image_url", image_url: { url: imageUrl } },
+                    ...additionalImages.map(image => ({ type: 'image_url' as const, image_url: { url: `data:${image.mimeType};base64,${image.base64}` } })),
                 ];
             } else {
                 logger.debug({ imageBase64Type: typeof imageBase64, hasValue: !!imageBase64 }, 'No image data');
@@ -392,7 +398,7 @@ export class AzureOpenAIProvider implements AIService {
             if (!text) throw new Error("Empty response from AI");
 
             // 解析响应
-            const answerText = this.extractTag(text, "answer_text") || "";
+            const answerText = normalizeAnswerText(this.extractTag(text, "answer_text") || "", questionText);
             const analysis = this.extractTag(text, "analysis") || "";
             const knowledgePointsRaw = this.extractTag(text, "knowledge_points") || "";
             const knowledgePoints = knowledgePointsRaw.split(/[,，\n]/).map(k => k.trim()).filter(k => k.length > 0);
@@ -577,7 +583,7 @@ export class AzureOpenAIProvider implements AIService {
         }
     }
 
-    async generateFigureSvg(imageBase64: string, mimeType: string, questionText?: string | null): Promise<FigureResult> {
+    async generateFigureSvg(imageBase64: string, mimeType: string, questionText?: string | null, additionalImages: AIImageInput[] = []): Promise<FigureResult> {
         const prompt = generateFigureRequest(questionText);
         logger.info({ provider: 'Azure OpenAI', deployment: this.deployment, imageSize: imageBase64.length }, 'Figure SVG Request');
 
@@ -586,7 +592,11 @@ export class AzureOpenAIProvider implements AIService {
                 model: this.deployment,
                 messages: [
                     { role: "system", content: prompt.system },
-                    { role: "user", content: [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }, { type: "text", text: prompt.user }] },
+                    { role: "user", content: [
+                        { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+                        ...additionalImages.map((image) => ({ type: "image_url" as const, image_url: { url: `data:${image.mimeType};base64,${image.base64}` } })),
+                        { type: "text", text: prompt.user },
+                    ] },
                 ],
                 max_tokens: maxTokens,
             }), 8192, () => logger.warn('Output truncated by reasoning, retrying with larger max_tokens'), this.model);
@@ -595,7 +605,7 @@ export class AzureOpenAIProvider implements AIService {
             logger.debug({ rawResponse: text }, 'Figure SVG AI raw response');
 
             if (!text) throw new Error("Empty response from AI");
-            return parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"));
+            return parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"), this.extractTag(text, "figure_spec"), questionText);
         } catch (error) {
             logger.error({ error, stack: error instanceof Error ? error.stack : undefined }, 'Error during figure SVG generation');
             this.handleError(error);

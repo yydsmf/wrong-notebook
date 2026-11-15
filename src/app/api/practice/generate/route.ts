@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { getAIService } from "@/lib/ai";
+import { generateSimilarQuestionWithSourceFigure } from "@/lib/ai/similar-question-figure";
 import { notFound, internalError, unauthorized } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/background-tasks";
@@ -81,13 +82,17 @@ async function handlePost(req: Request) {
         const similarQuestion = await trackBackgroundTaskForRequest(
             req,
             { userId: session.user.id, kind: 'practice', subject: describeQuestion(errorItemWithSubject), link: `/error-items/${errorItemId}`, retryRequest: { path: '/api/practice/generate', body: { errorItemId, language, difficulty: difficulty || 'medium' } } },
-            () => aiService.generateSimilarQuestion(
-                errorItemWithSubject.questionText || "",
-                tags,
-                language,
-                difficulty || 'medium',
-                errorItemWithSubject.gradeSemester,
-                errorItemWithSubject.figureSvg
+            () => generateSimilarQuestionWithSourceFigure(
+                aiService,
+                [
+                    errorItemWithSubject.questionText || "",
+                    tags,
+                    language,
+                    difficulty || 'medium',
+                    errorItemWithSubject.gradeSemester,
+                    errorItemWithSubject.figureSvg,
+                ],
+                errorItemWithSubject,
             )
         );
 

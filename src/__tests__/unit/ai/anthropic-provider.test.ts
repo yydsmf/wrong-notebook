@@ -4,6 +4,7 @@
  * 测试请求构造、正文提取、截断重试和错误码映射
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { FIGURE_GROUP_PROVIDER_RESPONSE } from '@/__tests__/fixtures/figure-group-fixtures';
 
 const mocks = vi.hoisted(() => {
     class APIError extends Error {
@@ -88,6 +89,16 @@ describe('AnthropicProvider', () => {
         mocks.create.mockResolvedValue(message(QUESTION_XML.replace('2 + 3 = ?', '求和。\nA. 2\nB. 4')));
         await expect(provider.generateSimilarQuestion('原题', [])).rejects.toThrow('AI_RESPONSE_ERROR');
     });
+
+    it('举一反三的竖式与新题数字矛盾时回退完整旧 SVG', async () => {
+        mocks.create.mockResolvedValue(message('<question_text>请列竖式计算34×25。</question_text><answer_text>850</answer_text><analysis>计算</analysis><has_figure>true</has_figure><figure_spec>{"type":"vertical_arithmetic","operation":"×","top":"43","bottom":"25","partialProducts":[]}</figure_spec><figure_svg><svg><text>旧图</text></svg></figure_svg>'));
+        const provider = new AnthropicProvider({ apiKey: 'sk-ant' });
+
+        const result = await provider.generateSimilarQuestion('求两位数乘25', []);
+
+        expect(result.figureSvg).toContain('旧图');
+        expect(result.figureSvg).not.toContain('data-arithmetic-row');
+    });
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.clientOptions.length = 0;
@@ -167,11 +178,31 @@ describe('AnthropicProvider', () => {
         mocks.create.mockResolvedValue(message('<has_figure>true</has_figure><figure_svg><svg><rect width="2" height="2"/></svg></figure_svg>'));
         const provider = new AnthropicProvider({ apiKey: 'sk-ant' });
 
-        const figure = await provider.generateFigureSvg('QUJD', 'image/jpeg', '如图');
+        const figure = await provider.generateFigureSvg('QUJD', 'image/jpeg', '如图', [{ base64: 'REVG', mimeType: 'image/png' }]);
 
         expect(mocks.create.mock.calls[0][0].messages[0].content[0]).toMatchObject({ type: 'image', source: { media_type: 'image/jpeg', data: 'QUJD' } });
+        expect(mocks.create.mock.calls[0][0].messages[0].content[1]).toMatchObject({ type: 'image', source: { media_type: 'image/png', data: 'REVG' } });
         expect(figure).toMatchObject({ hasFigure: true });
         expect(figure.figureSvg).toContain('<rect');
+    });
+
+    it('结构化配图校验使用目标题干，矛盾时回退完整旧 SVG', async () => {
+        mocks.create.mockResolvedValue(message('<has_figure>true</has_figure><figure_spec>{"type":"vertical_arithmetic","operation":"×","top":"43","bottom":"25","partialProducts":[]}</figure_spec><figure_svg><svg><text>旧图</text></svg></figure_svg>'));
+        const provider = new AnthropicProvider({ apiKey: 'sk-ant' });
+
+        const figure = await provider.generateFigureSvg('QUJD', 'image/png', '请列竖式计算34×25。');
+
+        expect(figure.figureSvg).toContain('旧图');
+        expect(figure.figureSvg).not.toContain('data-arithmetic-row');
+    });
+
+    it('从同一次配图响应解析结构化四选项图组', async () => {
+        mocks.create.mockResolvedValue(message(FIGURE_GROUP_PROVIDER_RESPONSE));
+        const provider = new AnthropicProvider({ apiKey: 'sk-ant' });
+        const figure = await provider.generateFigureSvg('QUJD', 'image/png', '比较选项');
+        expect(mocks.create).toHaveBeenCalledTimes(1);
+        expect(figure.figureSvg?.match(/data-figure-panel=/g)).toHaveLength(4);
+        expect(figure.figureSvg).not.toContain('legacy');
     });
 
     it('正文为空且因 max_tokens 截断时，按默认模型的最大输出重试一次', async () => {

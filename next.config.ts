@@ -16,6 +16,8 @@ export const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // 单题图片最多 50 MiB；兼容旧客户端另带的 20 MiB 首图，并为题目 JSON 留出余量。
+  experimental: { proxyClientMaxBodySize: 80 * 1024 * 1024 },
   serverExternalPackages: ['@prisma/client', 'bcryptjs'],
   allowedDevOrigins: process.env.NEXT_ALLOWED_DEV_ORIGIN ? [process.env.NEXT_ALLOWED_DEV_ORIGIN] : [],
   // 禁止 next dev 自动向 AGENTS.md / CLAUDE.md 写入 agent-rules 段落

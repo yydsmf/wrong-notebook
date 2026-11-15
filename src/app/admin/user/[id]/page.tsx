@@ -13,6 +13,7 @@ import { Loader2, ArrowLeft, User, BookOpen, PenTool, Layers, Calendar, Tag, Che
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { AdminUserSubmissions } from "@/components/admin/admin-user-submissions";
 import { AdminUserDetail } from "@/types/api";
 
 export default function AdminUserDetailPage() {
@@ -97,6 +98,8 @@ export default function AdminUserDetailPage() {
                     </Badge>
                 </div>
             </div>
+
+            <AdminUserSubmissions key={userId} userId={userId} />
 
             {/* Stats Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

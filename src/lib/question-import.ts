@@ -2,6 +2,8 @@ import { apiClient } from "@/lib/api-client";
 import { processImageFile } from "@/lib/image-utils";
 import type { ParsedQuestion } from "@/lib/ai";
 import type { AnalyzeResponse, UserProfile } from "@/types/api";
+import { buildQuestionImportPayload } from './question-import-payload';
+import { DEFAULT_AI_TIMEOUT_MS } from './ai-timeout';
 
 /** 导入成功后的题目摘要 */
 export interface ImportedQuestion {
@@ -33,13 +35,14 @@ export async function fetchConfirmBeforeImport(): Promise<boolean> {
 /** 调用 AI 识别一张图片中的题目 */
 export async function analyzeQuestionImage(
     imageBase64: string,
-    options: { language: 'zh' | 'en'; subjectId?: string | null; timeout?: number }
+    options: { language: 'zh' | 'en'; subjectId?: string | null; timeout?: number; autoSave?: boolean }
 ): Promise<AnalyzeResponse> {
     const data = await apiClient.post<AnalyzeResponse>("/api/analyze", {
         imageBase64,
         language: options.language,
         subjectId: options.subjectId || undefined,
-    }, { timeout: options.timeout, recoverable: true });
+        ...(options.autoSave ? { autoSave: true } : {}),
+    }, { timeout: options.timeout ?? DEFAULT_AI_TIMEOUT_MS, recoverable: true });
     if (!data || typeof data !== 'object') {
         throw new Error('Invalid API response: data is null or not an object');
     }
@@ -50,26 +53,10 @@ export async function analyzeQuestionImage(
  * 将识别结果直接保存为错题；未指定错题本时由服务端按学科匹配或新建错题本
  */
 export async function saveParsedQuestion(
-    parsed: ParsedQuestion,
-    options: { subjectId?: string | null; imageUrl?: string | null; paperLevel?: string | null }
+    parsed: ParsedQuestion & { importTaskId?: string },
+    options: { subjectId?: string | null; imageUrl?: string | null; imageUrls?: string[]; paperLevel?: string | null }
 ): Promise<ImportedQuestion> {
-    const created = await apiClient.post<CreatedErrorItem>("/api/error-items", {
-        questionText: parsed.questionText,
-        answerText: parsed.answerText,
-        analysis: parsed.analysis,
-        wrongAnswerText: parsed.wrongAnswerText || null,
-        mistakeAnalysis: parsed.mistakeAnalysis || null,
-        mistakeStatus: parsed.mistakeStatus || "unknown",
-        knowledgePoints: parsed.knowledgePoints || [],
-        difficultyStars: parsed.difficultyStars ?? null,
-        recognizedGradeSemester: parsed.gradeSemester ?? null,
-        hasFigure: parsed.hasFigure ?? false,
-        figureDescription: parsed.figureDescription ?? null,
-        subjectId: options.subjectId || undefined,
-        subjectName: options.subjectId ? undefined : parsed.subject,
-        originalImageUrl: options.imageUrl || "",
-        paperLevel: options.paperLevel || undefined,
-    });
+    const created = await apiClient.post<CreatedErrorItem>("/api/error-items", buildQuestionImportPayload(parsed, options), { timeout: DEFAULT_AI_TIMEOUT_MS, recoverable: true });
     return {
         id: created.id,
         shortId: created.shortId ?? null,
@@ -86,7 +73,8 @@ export async function importQuestionImage(
 ): Promise<ImportedQuestion> {
     const imageBase64 = await processImageFile(file instanceof File ? file : new File([file], "question.jpg", { type: file.type || "image/jpeg" }));
     options.onStage?.('analyzing');
-    const parsed = await analyzeQuestionImage(imageBase64, options);
+    const parsed = await analyzeQuestionImage(imageBase64, { ...options, autoSave: true });
     options.onStage?.('saving');
+    if (parsed.importedQuestion) return parsed.importedQuestion;
     return saveParsedQuestion(parsed, { subjectId: options.subjectId, imageUrl: imageBase64, paperLevel: options.paperLevel });
 }

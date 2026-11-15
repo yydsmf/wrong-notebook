@@ -64,6 +64,27 @@ export interface StudentSubmission {
     answers: StudentSubmissionAnswer[];
 }
 
+export interface AdminSubmissionSummary extends Omit<StudentSubmission, 'answers'> {
+    examTitle: string | null;
+}
+
+export interface SubmissionPagination {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+}
+
+export interface AdminSubmissionList {
+    submissions: AdminSubmissionSummary[];
+    pagination: SubmissionPagination;
+}
+
+export interface AdminSubmissionDetail extends AdminSubmissionSummary {
+    answers: StudentSubmissionAnswer[];
+    pagination: SubmissionPagination;
+}
+
 export interface Tag {
     id: string;
     name: string;
@@ -110,6 +131,7 @@ export interface ErrorItem {
     subjectId?: string | null;
     subject?: Notebook | null;
     originalImageUrl: string;
+    originalImageUrls?: string | null;
     ocrText?: string | null;
     questionText?: string | null;
     answerText?: string | null;
@@ -154,12 +176,13 @@ export type ErrorItemSummary = Pick<ErrorItem,
 
 /** 打印所需内容，独立于完整详情与列表卡片的数据类型。 */
 export type PrintableErrorItem = ErrorItemSummary & Pick<ErrorItem,
-    'originalImageUrl' | 'answerText' | 'analysis' | 'figureSvg' | 'imageFragments' | 'figureScale' | 'figureAlign' | 'answerSpacePx' | 'gradeSemester' | 'paperLevel'
+    'originalImageUrl' | 'originalImageUrls' | 'answerText' | 'analysis' | 'figureSvg' | 'imageFragments' | 'figureScale' | 'figureAlign' | 'answerSpacePx' | 'gradeSemester' | 'paperLevel'
 > & { subject?: Pick<Notebook, 'name'> | null };
 
 // For creation/updates
 export interface CreateErrorItemRequest extends ParsedQuestion {
     originalImageUrl: string;
+    originalImageUrls?: string[];
     figureScale?: number;
     figureAlign?: 'left' | 'center' | 'right';
     subjectId?: string;
@@ -168,7 +191,12 @@ export interface CreateErrorItemRequest extends ParsedQuestion {
     paperLevel?: string;
 }
 
-export type AnalyzeResponse = ParsedQuestion;
+export type AnalyzeResponse = ParsedQuestion & {
+    importTaskId?: string;
+    importedQuestion?: {
+        id: string; shortId: string | null; subjectId: string | null; notebookName: string | null; duplicate?: boolean;
+    };
+};
 
 export interface QuestionSimilarityResponse {
     similarity: number;
@@ -387,6 +415,7 @@ export interface PracticeHistoryRecord {
     wrongAnswerText?: string | null;
     mistakeAnalysis?: string | null;
     originalImageUrl?: string | null;
+    originalImageUrls?: string | null;
     figureSvg?: string | null;
     createdAt: string;
     exam: { paperId: string; order: number; title: string } | null;

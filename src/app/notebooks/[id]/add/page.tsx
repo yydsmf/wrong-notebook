@@ -91,7 +91,7 @@ export default function AddErrorPage() {
                                 onClose={flow.closeBatch}
                             />
                         ) : inputMode === "image" ? (
-                            <UploadZone onImageSelect={flow.selectImage} isAnalyzing={flow.isBusy} />
+                            <UploadZone onImagesSelect={flow.selectImages} isAnalyzing={flow.isBusy} />
                         ) : (
                             <TextInputZone
                                 onSubmit={flow.submitText}
@@ -106,6 +106,7 @@ export default function AddErrorPage() {
                     <CorrectionEditor
                         initialData={flow.parsedData}
                         imagePreview={flow.currentImage}
+                        imagePreviews={flow.currentImages}
                         onSave={flow.saveReviewed}
                         onCancel={flow.cancelReview}
                         initialSubjectId={notebookId}
@@ -122,6 +123,10 @@ export default function AddErrorPage() {
                 onCropComplete={flow.cropComplete}
                 onMultiCropComplete={flow.startBatch}
                 onRegionsSelected={flow.cropRegions}
+                position={flow.cropPosition}
+                initialMode={flow.cropMode}
+                modeLocked={flow.cropPosition.current > 1}
+                isProcessing={flow.isCropping}
             />
         </main>
     );

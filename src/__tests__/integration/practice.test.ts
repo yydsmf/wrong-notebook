@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     scheduleMasteryEvaluation: vi.fn(),
     mockAIService: {
         generateSimilarQuestion: vi.fn(),
+        generateFigureSvg: vi.fn(),
     },
     mockSession: {
         user: {
@@ -192,6 +193,36 @@ describe('/api/practice', () => {
                 difficulty: 'hard',
             });
             expect(typeof saved.generatedAt).toBe('string');
+        });
+
+        it('原题带配图时用原图和新题题干生成新的 SVG 配图', async () => {
+            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue({
+                ...mockErrorItem,
+                questionText: '20. 观察两位数乘25的乘法竖式，与个位5相乘的积记为甲',
+                hasFigure: false,
+                originalImageUrl: 'data:image/png;base64,QQ==',
+                originalImageUrls: JSON.stringify(['data:image/png;base64,QQ==', 'data:image/jpeg;base64,Qg==']),
+            });
+            mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({
+                questionText: '新题：观察新的竖式', answerText: '答案', analysis: '解析', knowledgePoints: [], figureSvg: null,
+            });
+            mocks.mockAIService.generateFigureSvg.mockResolvedValue({ hasFigure: true, figureSvg: '<svg></svg>' });
+
+            const request = new Request('http://localhost/api/practice/generate', {
+                method: 'POST',
+                body: JSON.stringify({ errorItemId: 'error-item-1', language: 'zh', difficulty: 'medium' }),
+                headers: { 'Content-Type': 'application/json' },
+            });
+            const response = await GENERATE_POST(request);
+            const data = await response.json();
+
+            expect(response.status).toBe(200);
+            expect(mocks.mockAIService.generateFigureSvg).toHaveBeenCalledWith(
+                'QQ==', 'image/png', '新题：观察新的竖式', [{ base64: 'Qg==', mimeType: 'image/jpeg' }],
+            );
+            expect(data.figureSvg).toBe('<svg></svg>');
+            const saved = JSON.parse(mocks.mockPrismaErrorItem.update.mock.calls[0][0].data.lastPractice);
+            expect(saved.figureSvg).toBe('<svg></svg>');
         });
 
         it('暂存失败时仍应返回生成的题目', async () => {

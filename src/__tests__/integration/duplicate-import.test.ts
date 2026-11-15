@@ -226,6 +226,18 @@ describe('题目导入自动判重（真实 SQLite）', () => {
         expect(await database.errorItem.count()).toBe(1);
     });
 
+    it('重复导入同一道多图题保留本次所有原图，原题不被覆盖', async () => {
+        const original = await existing();
+        const images = ['data:image/png;base64,QQ==', 'data:image/jpeg;base64,Qg=='];
+        const response = await save({ originalImageUrls: images });
+        const result = await response.json();
+        expect(result.duplicate).toBe(true);
+        expect(await database.practiceRecord.findUniqueOrThrow({ where: { id: result.practiceRecordId } })).toMatchObject({
+            originalImageUrl: images[0], originalImageUrls: JSON.stringify(images),
+        });
+        expect(await database.errorItem.findUniqueOrThrow({ where: { id: original.id } })).toEqual(original);
+    });
+
     it('默认阈值为 90%，保存个人阈值后立即用于后续导入且不影响其他用户', async () => {
         expect((await (await GET_PROFILE()).json()).questionDuplicateThreshold).toBe(90);
         const response = await UPDATE_PROFILE(request({ questionDuplicateThreshold: 95 }, '/api/user'));

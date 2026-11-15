@@ -8,6 +8,8 @@ import { describeQuestion, trackBackgroundTaskForRequest } from "@/lib/backgroun
 import { resolveNotebookScope, SUBJECT_DISPLAY_NAMES } from "@/lib/notebook-scope";
 import { consumeAiQuota } from "@/lib/ai-quota";
 import { withRecoverableResponse } from "@/lib/recoverable-response";
+import { getOriginalImages } from '@/lib/original-images';
+import { parseImageInput } from '@/lib/ai/image-input';
 
 const logger = createLogger('api:error-items:reanswer');
 
@@ -35,6 +37,7 @@ async function handlePost(
                 shortId: true,
                 questionText: true,
                 originalImageUrl: true,
+                originalImageUrls: true,
                 gradeSemester: true,
                 subject: { select: { name: true, stage: true, subjectKey: true } },
             },
@@ -51,16 +54,24 @@ async function handlePost(
         const scope = item.subject ? resolveNotebookScope(item.subject) : null;
         const subject = scope?.subject ? SUBJECT_DISPLAY_NAMES[scope.subject] : null;
         // 原图以 data URL 保存；文字录入的题目没有原图
-        const image = item.originalImageUrl?.startsWith('data:') ? item.originalImageUrl : undefined;
+        const images = getOriginalImages(item).filter(image => image.startsWith('data:'));
+        const image = images[0];
 
         const questionText = item.questionText;
         const limited = await consumeAiQuota(user, 'reanswer');
         if (limited) return limited;
+        const reanswer = () => {
+            const ai = getAIService();
+            if (images.length > 1) {
+                return ai.reanswerQuestion(questionText, language, subject, image, item.gradeSemester, undefined, images.slice(1).map(image => parseImageInput(image)));
+            }
+            return ai.reanswerQuestion(questionText, language, subject, image, item.gradeSemester);
+        };
 
         const result = await trackBackgroundTaskForRequest(
             req,
             { userId: user.id, kind: 'reanswer', subject: describeQuestion(item), link: `/error-items/${id}`, retryRequest: { path: `/api/error-items/${id}/reanswer`, body: { language } } },
-            () => getAIService().reanswerQuestion(questionText, language, subject, image, item.gradeSemester)
+            reanswer
         );
         if (!result.answerText.trim() && !result.analysis.trim()) {
             return badRequest("EMPTY_ANSWER");

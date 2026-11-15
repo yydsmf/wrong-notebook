@@ -6,6 +6,10 @@ import { FIGURE } from './support/mock-ai.mjs';
 import { acceptConfirmDialog } from './helpers';
 
 test('[E2E-M07] 拒绝跨邮箱导入并在同邮箱空账号恢复备份', async ({ page, browser, scenario }) => {
+    const originalImages = [
+        `data:image/png;base64,${readFileSync(join(process.cwd(), 'e2e/fixtures/math_test.png')).toString('base64')}`,
+        `data:image/svg+xml;base64,${Buffer.from(FIGURE).toString('base64')}`,
+    ];
     const secondBook = await scenario.db.subject.create({ data: { name: '第二套体系', userId: scenario.user.id, stage: 'junior_high', subjectKey: 'math', tagSet: 'e2e-secondary' } });
     const leafIds: string[] = [];
     for (const [index, tagSet] of ['default', 'e2e-secondary'].entries()) {
@@ -13,11 +17,11 @@ test('[E2E-M07] 拒绝跨邮箱导入并在同邮箱空账号恢复备份', asyn
         const child = await scenario.db.knowledgeTag.create({ data: { name: '同名知识点', subject: 'math', userId: scenario.user.id, tagSet, parentId: parent.id } });
         leafIds.push(child.id);
     }
-    const a = await scenario.item('A', { figureSvg: FIGURE, hasFigure: true, figureScale: 50, figureAlign: 'left', userNotes: '备份中的笔记', masteryProbability: 0.7, masteryEvaluatedAt: new Date() });
+    const a = await scenario.item('A', { originalImageUrl: originalImages[0], originalImageUrls: JSON.stringify(originalImages), figureSvg: FIGURE, hasFigure: true, figureScale: 50, figureAlign: 'left', userNotes: '备份中的笔记', masteryProbability: 0.7, masteryEvaluatedAt: new Date() });
     const b = await scenario.item('B', { subjectId: secondBook.id, questionText: `请根据材料解释钟摆运动的原因，并写出完整论证。E2E_${scenario.id}_B`, masteryProbability: 0.7, masteryEvaluatedAt: new Date() });
     await scenario.db.errorItem.update({ where: { id: a.id }, data: { tags: { connect: [{ id: leafIds[0] }, { id: 'e2e-leaf-default' }] } } });
     await scenario.db.errorItem.update({ where: { id: b.id }, data: { tags: { connect: [{ id: leafIds[1] }, { id: 'e2e-leaf-e2e-secondary' }] } } });
-    await scenario.db.practiceRecord.create({ data: { userId: scenario.user.id, errorItemId: a.id, result: 'correct', source: 'practice', questionText: '备份中的练习题' } });
+    await scenario.db.practiceRecord.create({ data: { userId: scenario.user.id, errorItemId: a.id, result: 'correct', source: 'practice', questionText: '备份中的练习题', originalImageUrl: originalImages[0], originalImageUrls: JSON.stringify(originalImages) } });
     await scenario.db.examPaper.create({ data: { userId: scenario.user.id, title: '备份中的试卷', status: 'ready', scope: 'all', difficulty: 'medium', requestedCount: 1,
         subjectIds: JSON.stringify([scenario.book.id]), questions: { create: { order: 1, errorItemId: a.id, sourceShortId: a.shortId!, status: 'ready', questionText: '备份中的试卷新题',
             answerText: '答案', analysis: '解析', figureSvg: FIGURE, figureScale: 75, figureAlign: 'right' } } } });
@@ -30,9 +34,10 @@ test('[E2E-M07] 拒绝跨邮箱导入并在同邮箱空账号恢复备份', asyn
     const file = join(runState.reportDir, `${scenario.id}-backup.json`);
     await download.saveAs(file);
     const contents = readFileSync(file, 'utf8');
-    const backup = JSON.parse(contents) as { version: number; user: Record<string, unknown>; errorItems: unknown[] };
-    expect(backup.version).toBe(6);
+    const backup = JSON.parse(contents) as { version: number; user: Record<string, unknown>; errorItems: Array<{ questionText: string; originalImageUrl: string; originalImageUrls?: string }> };
+    expect(backup.version).toBe(7);
     expect(backup.errorItems).toHaveLength(2);
+    expect(backup.errorItems.find((item) => item.questionText === a.questionText)).toMatchObject({ originalImageUrl: originalImages[0], originalImageUrls: JSON.stringify(originalImages) });
     expect(backup.user).not.toHaveProperty('password');
     expect(contents).not.toContain('e2e-dummy-key');
 
@@ -77,10 +82,12 @@ test('[E2E-M07] 拒绝跨邮箱导入并在同邮箱空账号恢复备份', asyn
         const restoredA = restored.find((item) => item.questionText === a.questionText)!;
         const restoredB = restored.find((item) => item.questionText === b.questionText)!;
         expect(restoredA).toMatchObject({ figureScale: 50, figureAlign: 'left', userNotes: '备份中的笔记' });
+        expect(restoredA).toMatchObject({ originalImageUrl: originalImages[0], originalImageUrls: JSON.stringify(originalImages) });
         expect(restoredA.tags.find((tag) => tag.name === '同名知识点')).toMatchObject({ userId: scenario.user.id, tagSet: 'default', parent: { name: '章节甲' } });
         expect(restoredB.tags.find((tag) => tag.name === '同名知识点')).toMatchObject({ userId: scenario.user.id, tagSet: 'e2e-secondary', parent: { name: '章节乙' } });
         expect(restoredB.subject?.tagSet).toBe('e2e-secondary');
         expect(await scenario.db.practiceRecord.count({ where: { userId: scenario.user.id, errorItemId: restoredA.id } })).toBe(1);
+        expect(await scenario.db.practiceRecord.findFirstOrThrow({ where: { userId: scenario.user.id, errorItemId: restoredA.id } })).toMatchObject({ originalImageUrl: originalImages[0], originalImageUrls: JSON.stringify(originalImages) });
         const paper = await scenario.db.examPaper.findFirstOrThrow({ where: { userId: scenario.user.id }, include: { questions: true } });
         expect(paper.questions[0]).toMatchObject({ errorItemId: restoredA.id, figureScale: 75, figureAlign: 'right' });
         await receiver.goto('/notebooks');

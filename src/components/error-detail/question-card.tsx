@@ -18,6 +18,7 @@ import { ManualFigureUploadButton } from "@/components/manual-figure-upload-butt
 import { apiClient } from "@/lib/api-client";
 import { toast } from "@/lib/feedback";
 import { parseImageFragments } from "@/lib/image-fragments";
+import { getOriginalImages } from '@/lib/original-images';
 
 interface QuestionCardProps {
     item: ErrorItemDetail;
@@ -75,6 +76,7 @@ export function QuestionCard({ item, educationStage, saveFields, onUpdate, reloa
                 <div className="pt-3">
                     <ToggleImage
                         src={item.originalImageUrl}
+                        sources={getOriginalImages(item)}
                         alt={t.detail.originalProblem || "Original Problem"}
                         showLabel={t.replaceImage?.view || "View original image"}
                         hideLabel={t.replaceImage?.hide || "Hide original image"}
@@ -86,7 +88,7 @@ export function QuestionCard({ item, educationStage, saveFields, onUpdate, reloa
                             <ReplaceQuestionImageButton
                                 errorItemId={item.id}
                                 hasImage={!!item.originalImageUrl}
-                                onDone={(originalImageUrl) => { onUpdate({ originalImageUrl }); setShowImage(true); }}
+                                onDone={(originalImageUrl) => { onUpdate({ originalImageUrl, originalImageUrls: null }); setShowImage(true); }}
                             />
                             {item.originalImageUrl && <RegenerateFigureButton errorItemId={item.id} onDone={onUpdate} />}
                             <ManualFigureUploadButton

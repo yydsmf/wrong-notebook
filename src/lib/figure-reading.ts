@@ -1,0 +1,46 @@
+import { MAX_FIGURE_SVG_LENGTH } from './figure-svg';
+
+interface FigureReadingSize {
+    width: number;
+    height: number;
+    minimumFontSize: number;
+}
+
+const svgNumber = (value: string | null) => value && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value) ? Number(value) : NaN;
+const viewBox = (element: Element) => {
+    const values = (element.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(svgNumber);
+    return values.length === 4 && values.every(Number.isFinite) && values[2] > 0 && values[3] > 0 ? values : null;
+};
+
+/** 只测量显式字号与等比例子画布，不把不明样式或变换的旧 SVG 当作可可靠测量的图。 */
+export function getFigureReadingSize(markup: string, width: number, height: number): FigureReadingSize | null {
+    if (typeof DOMParser === 'undefined' || markup.length > MAX_FIGURE_SVG_LENGTH
+        || ![width, height].every((value) => Number.isFinite(value) && value > 0)) return null;
+    const document = new DOMParser().parseFromString(markup, 'image/svg+xml');
+    const root = document.documentElement;
+    if (document.querySelector('parsererror') || root.localName !== 'svg' || root.namespaceURI !== 'http://www.w3.org/2000/svg'
+        || root.querySelector('[transform], [style], style, use, textPath, tspan[font-size]')
+        || root.hasAttribute('transform') || root.hasAttribute('style')) return null;
+    let minimumFontSize = Infinity;
+    const measure = (element: Element, scale: number): boolean => {
+        if (element.localName === 'text' && element.textContent?.trim()) {
+            const fontSize = svgNumber(element.getAttribute('font-size'));
+            if (!Number.isFinite(fontSize) || fontSize <= 0) return false;
+            minimumFontSize = Math.min(minimumFontSize, fontSize * scale);
+        }
+        if (element.localName === 'svg') {
+            const bounds = viewBox(element);
+            const ratio = element.getAttribute('preserveAspectRatio');
+            if (!bounds || (ratio !== null && ratio !== 'xMidYMid meet')) return false;
+            const viewportWidth = element === root ? width : svgNumber(element.getAttribute('width'));
+            const viewportHeight = element === root ? height : svgNumber(element.getAttribute('height'));
+            if (![viewportWidth, viewportHeight].every((value) => Number.isFinite(value) && value > 0)) return false;
+            scale *= Math.min(viewportWidth / bounds[2], viewportHeight / bounds[3]);
+        }
+        return Array.from(element.children).every((child) => measure(child, scale));
+    };
+    if (!measure(root, 1) || !Number.isFinite(minimumFontSize)) return null;
+    const scale = Math.max(1, 12 / minimumFontSize);
+    if (scale > 4 || width * scale > 2400 || height * scale > 4800) return null;
+    return { width: width * scale, height: height * scale, minimumFontSize: minimumFontSize * scale };
+}

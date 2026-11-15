@@ -160,6 +160,23 @@ describe('proxy', () => {
             expect(response).toBeUndefined();
         });
 
+        it('改密前允许读取安装状态，供向导确定后续步骤', async () => {
+            vi.mocked(getToken).mockResolvedValue(flaggedToken as unknown as JWT);
+            expect(await proxy(new NextRequest('http://localhost:3000/api/setup'))).toBeUndefined();
+        });
+
+        it.each([
+            ['/api/tasks', 'GET'],
+            ['/api/notebooks', 'GET'],
+            ['/api/setup', 'POST'],
+        ])('改密前的受限API返回JSON错误而不重定向：%s %s', async (path, method) => {
+            vi.mocked(getToken).mockResolvedValue(flaggedToken as unknown as JWT);
+            const response = await proxy(new NextRequest(`http://localhost:3000${path}`, { method }));
+            expect(response?.status).toBe(403);
+            expect(response?.headers.get('location')).toBeNull();
+            expect(await response?.json()).toEqual({ message: 'Password change required', code: 'PASSWORD_CHANGE_REQUIRED' });
+        });
+
         it('已改密码的管理员正常访问页面', async () => {
             vi.mocked(getToken).mockResolvedValue({ ...flaggedToken, mustChangePassword: false } as unknown as JWT);
 

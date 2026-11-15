@@ -46,6 +46,7 @@ export async function GET(
                         wrongAnswerText: true,
                         mistakeAnalysis: true,
                         originalImageUrl: true,
+                        originalImageUrls: true,
                         figureSvg: true,
                         createdAt: true,
                         examQuestion: { select: { paperId: true, order: true, paper: { select: { title: true } } } },

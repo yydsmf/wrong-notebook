@@ -107,7 +107,7 @@ describe('按阶段估算进度并显示实际用时', () => {
         vi.setSystemTime(new Date('2026-10-19T04:01:00Z'));
         advance(1);
         expect(elapsed()).toBe('已用时：01:01');
-        expect(estimatedProgress()).toBe('44');
+        expect(estimatedProgress()).toBe('31');
     });
 
     it('长任务使用时分秒格式，英文界面也明确标注估算', async () => {

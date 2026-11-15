@@ -19,6 +19,7 @@ export interface ErrorItemDetail {
     tags: KnowledgeTag[]; // 新的标签关联
     masteryLevel: number;
     originalImageUrl: string;
+    originalImageUrls?: string | null;
     referenceImageUrl?: string | null;
     wrongAnswerImageUrl?: string | null;
     userNotes: string | null;

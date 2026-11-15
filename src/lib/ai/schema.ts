@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { sanitizeFigureSvg } from '../figure-svg';
+import { renderFigureSpecDetailed } from '../figure-spec';
 import { parseRecognizedGrade } from '../question-grade';
+import { normalizeAnswerText } from './answer-format';
+import { logger } from '../logger';
 
 /**
  * Zod schema for validating AI-parsed questions
@@ -121,6 +124,8 @@ export function normalizeSubject(value: string | null | undefined): ParsedQuesti
     return parsed.success ? parsed.data : undefined;
 }
 
+export { normalizeAnswerText };
+
 /** 每题最多选取的知识点数量 */
 export const MAX_KNOWLEDGE_TAGS = 5;
 
@@ -174,10 +179,24 @@ export interface FigureResult {
 }
 
 /**
- * 解析 AI 输出的 <has_figure> 与 <figure_svg>：SVG 经净化，无效时为空；
- * 画出了有效配图时视为有配图
+ * 解析 AI 输出的 <has_figure>、<figure_spec> 与 <figure_svg>。
+ * 结构化图形优先由本地模板绘制；可选的目标题干用于交叉核对；旧 SVG 仍作为兼容和特殊图形回退。
  */
-export function parseFigure(hasFigureRaw: string | null | undefined, figureSvgRaw: string | null | undefined): FigureResult {
-    const figureSvg = sanitizeFigureSvg(figureSvgRaw);
-    return { hasFigure: hasFigureRaw?.trim().toLowerCase() === 'true' || figureSvg !== null, figureSvg };
+export function parseFigure(
+    hasFigureRaw: string | null | undefined,
+    figureSvgRaw: string | null | undefined,
+    figureSpecRaw?: string | null,
+    questionText?: string | null,
+): FigureResult {
+    const structuredResult = renderFigureSpecDetailed(figureSpecRaw, questionText);
+    if (figureSpecRaw?.trim() && !structuredResult.svg && process.env.STRUCTURED_FIGURE_DIAGNOSTICS === '1') {
+        logger.debug({ reason: structuredResult.diagnostic.reason, type: structuredResult.diagnostic.type }, 'Structured figure spec fallback');
+    }
+    const structuredSvg = structuredResult.svg;
+    const legacySvg = sanitizeFigureSvg(figureSvgRaw);
+    const figureSvg = structuredSvg || legacySvg;
+    return {
+        hasFigure: hasFigureRaw?.trim().toLowerCase() === 'true' || figureSvg !== null,
+        figureSvg,
+    };
 }

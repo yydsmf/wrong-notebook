@@ -181,9 +181,9 @@ describe('数据导出后再导入（真实 SQLite）', () => {
         expect(await database.knowledgeTag.count({ where: { name: '我的句式笔记' } })).toBe(1);
     }, 120000);
 
-    it('导出文件使用第 6 版格式，包含 tagSet 和学生答题记录字段', async () => {
+    it('导出文件使用第 7 版格式，包含 tagSet、学生答题记录和多图字段', async () => {
         const backup = await exportBackup();
-        expect(backup.version).toBe(6);
+        expect(backup.version).toBe(7);
         expect(backup.paperGroups).toContainEqual(expect.objectContaining({ id: 'group-b', key: 'b', name: 'B卷' }));
         expect(backup.studentSubmissions).toEqual([]);
         expect(backup.systemTags).toBeDefined();
@@ -205,6 +205,18 @@ describe('数据导出后再导入（真实 SQLite）', () => {
                 expect.objectContaining({ id: 'tag-2', tagSet: 'cn-math-taxonomy' }),
             ])
         );
+    });
+
+    it('单题多张原图和重复做错快照经过备份可完整还原', async () => {
+        const images = JSON.stringify(['data:image/png;base64,QQ==', 'data:image/jpeg;base64,Qg==']);
+        await database.errorItem.update({ where: { id: 'item-1' }, data: { originalImageUrls: images } });
+        await database.practiceRecord.updateMany({ where: { errorItemId: 'item-1' }, data: { originalImageUrls: images, source: 'duplicate_import' } });
+        const backup = await exportBackup();
+        expect(backup.errorItems.find((item: { id: string }) => item.id === 'item-1')).toMatchObject({ originalImageUrls: images });
+        await clearUserData();
+        await importBackup(backup);
+        expect(await database.errorItem.findFirstOrThrow({ where: { shortId: 'AbC234' } })).toMatchObject({ originalImageUrls: images });
+        expect(await database.practiceRecord.findFirstOrThrow({ where: { source: 'duplicate_import' } })).toMatchObject({ originalImageUrls: images });
     });
 
     it('学生答题记录及判分结果完整备份还原，并在重复导入时去重', async () => {

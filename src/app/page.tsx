@@ -121,7 +121,7 @@ function HomeContent() {
                                     onClose={flow.closeBatch}
                                 />
                             ) : inputMode === "image" ? (
-                                <UploadZone onImageSelect={flow.selectImage} isAnalyzing={flow.isBusy} />
+                                <UploadZone onImagesSelect={flow.selectImages} isAnalyzing={flow.isBusy} />
                             ) : inputMode === "text" ? (
                                 <TextInputZone
                                     onSubmit={flow.submitText}
@@ -149,6 +149,10 @@ function HomeContent() {
                         onCropComplete={flow.cropComplete}
                         onMultiCropComplete={flow.startBatch}
                         onRegionsSelected={flow.cropRegions}
+                        position={flow.cropPosition}
+                        initialMode={flow.cropMode}
+                        modeLocked={flow.cropPosition.current > 1}
+                        isProcessing={flow.isCropping}
                     />
                 )}
 
@@ -158,6 +162,7 @@ function HomeContent() {
                         onSave={flow.saveReviewed}
                         onCancel={flow.cancelReview}
                         imagePreview={flow.currentImage}
+                        imagePreviews={flow.currentImages}
                         initialSubjectId={targetNotebookId || undefined}
                         aiTimeout={flow.aiTimeout}
                     />

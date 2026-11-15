@@ -4,6 +4,7 @@ export const REQUEST_PROGRESS_STAGES = [
     'thinking',
     'waiting',
     'collecting',
+    'saving',
     'completed',
 ] as const;
 

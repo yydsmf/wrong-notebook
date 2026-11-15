@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { questionImagesSchema } from '@/lib/ai/image-input';
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -18,10 +19,13 @@ import { getDefaultPaperLevelGroupId, ensureDefaultPaperGroups } from "@/lib/pap
 import { DEFAULT_FIGURE_ALIGN, DEFAULT_FIGURE_SCALE, FIGURE_ALIGNS, MAX_FIGURE_SCALE, MIN_FIGURE_SCALE } from "@/lib/figure-scale";
 import { questionSaveErrorResponse } from "@/lib/question-save-error-response";
 import type { QuestionSaveFailureStage } from "@/lib/question-save-error-response";
+import { finishBackgroundTaskImport } from '@/lib/background-tasks';
+import { withRecoverableResponse } from '@/lib/recoverable-response';
 
 const logger = createLogger('api:error-items');
 
 const importSchema = z.object({
+    importTaskId: z.string().max(100).optional(),
     questionText: z.string().max(20000).nullish(),
     answerText: z.string().max(20000).nullish(),
     analysis: z.string().max(50000).nullish(),
@@ -33,6 +37,7 @@ const importSchema = z.object({
         z.array(z.string().trim().min(1).max(200)).max(100).optional(),
     ),
     originalImageUrl: z.string().max(20 * 1024 * 1024).default(''),
+    originalImageUrls: questionImagesSchema.optional(),
     subjectId: z.string().nullish(),
     subjectName: z.string().max(100).nullish(),
     gradeSemester: z.string().max(100).nullish(),
@@ -46,15 +51,22 @@ const importSchema = z.object({
     geogebraCommands: z.string().nullish(),
 });
 
-export async function POST(req: Request) {
+async function handlePost(req: Request) {
     logger.info('POST /api/error-items called');
 
     let failureStage: QuestionSaveFailureStage = 'save';
+    let importTaskId: string | undefined;
+    let ownerId: string | undefined;
     try {
         const session = await getServerSession(authOptions);
         const parsed = importSchema.safeParse(await req.json());
         if (!parsed.success) return validationError('QUESTION_SAVE_INVALID_INPUT', parsed.error.issues);
-        const body = parsed.data;
+        const body = {
+            ...parsed.data,
+            originalImageUrl: parsed.data.originalImageUrls?.[0] ?? parsed.data.originalImageUrl,
+            originalImageUrls: parsed.data.originalImageUrls ? JSON.stringify(parsed.data.originalImageUrls) : null,
+        };
+        importTaskId = body.importTaskId;
         const {
             questionText,
             answerText,
@@ -109,6 +121,7 @@ export async function POST(req: Request) {
             logger.warn({ sessionEmail: session?.user?.email }, 'User not found in DB');
             return unauthorized("No user found in DB");
         }
+        ownerId = user.id;
 
         // 校验传入的 paperLevel 是否有效（不创建分组，分组在事务内按需创建）
         let resolvedPaperLevel: string | null = null;
@@ -208,6 +221,7 @@ export async function POST(req: Request) {
                         userId: user.id,
                         subjectId: subjectId || undefined,
                         originalImageUrl,
+                        originalImageUrls: body.originalImageUrls,
                         questionText,
                         answerText,
                         analysis,
@@ -249,8 +263,10 @@ export async function POST(req: Request) {
         });
         const duplicate = 'duplicate' in result && result.duplicate;
         if (duplicate) scheduleMasteryEvaluation([result.id]);
+        if (importTaskId) finishBackgroundTaskImport(user.id, importTaskId, undefined, result.id);
         return NextResponse.json(result, { status: duplicate ? 200 : 201 });
     } catch (error) {
+        if (importTaskId && ownerId) finishBackgroundTaskImport(ownerId, importTaskId, 'QUESTION_SAVE_FAILED');
         logger.error({
             error,
             errorMessage: error instanceof Error ? error.message : String(error),
@@ -259,3 +275,5 @@ export async function POST(req: Request) {
         return questionSaveErrorResponse(error, failureStage);
     }
 }
+
+export const POST = withRecoverableResponse(handlePost);

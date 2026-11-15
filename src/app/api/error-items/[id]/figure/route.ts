@@ -48,6 +48,7 @@ async function handlePost(
             { userId: user.id, kind: 'figure', subject: describeQuestion(item), link: `/error-items/${id}`, retryRequest: { path: `/api/error-items/${id}/figure`, body: {} } },
             async () => {
                 const figure = await getAIService().generateFigureSvg(match[2], match[1], item.questionText);
+                if (!figure.figureSvg) throw new Error('NO_FIGURE_GENERATED');
                 return prisma.errorItem.update({
                     where: { id },
                     data: { hasFigure: figure.hasFigure, figureSvg: figure.figureSvg },
@@ -60,6 +61,7 @@ async function handlePost(
         return NextResponse.json(updated);
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (message === 'NO_FIGURE_GENERATED') return badRequest(message);
         logger.error({ error: message }, 'Error regenerating figure');
         // AI 错误码交给前端映射为提示文案
         return internalError(message.startsWith('AI_') ? message.split(':')[0] : "Failed to regenerate figure");

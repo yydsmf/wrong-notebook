@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { Loader2, Maximize2, X } from "lucide-react";
+import { FigureViewer } from "@/components/figure-viewer";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { figureSvgToDataUri } from "@/lib/figure-svg";
+import { getFigureReadingSize } from "@/lib/figure-reading";
 import { normalizeFigureAlign, normalizeFigureScale } from "@/lib/figure-scale";
 import type { FigureAlign } from "@/lib/figure-scale";
 import type { ImageFragment } from "@/lib/image-fragments";
@@ -31,6 +33,9 @@ const ALIGN_CLASS: Record<FigureAlign, string> = {
 export function QuestionFigure({ svg, images = [], scale, align, className, onRemoveImage }: QuestionFigureProps) {
     const { t } = useLanguage();
     const [removingId, setRemovingId] = useState<string | null>(null);
+    const [preview, setPreview] = useState<{ src: string; svg?: string } | null>(null);
+    const [readingSize, setReadingSize] = useState<{ svg: string; width: number } | null>(null);
+    const previewTrigger = useRef<HTMLButtonElement | null>(null);
     if (!svg && images.length === 0) return null;
     const figureScale = normalizeFigureScale(scale);
     const figureAlign = normalizeFigureAlign(align);
@@ -44,8 +49,10 @@ export function QuestionFigure({ svg, images = [], scale, align, className, onRe
         ...alignMargin,
         maxHeight: 360,
         zoom: figureScale / 100,
-        maxWidth: `${Math.min(figureScale, 100)}%`,
+        maxWidth: "100%",
     };
+    const frameStyle = { maxWidth: `${Math.min(figureScale, 100)}%` };
+    const reading = readingSize?.svg === svg ? readingSize : null;
 
     const removeImage = async (id: string) => {
         if (!onRemoveImage || removingId) return;
@@ -57,20 +64,44 @@ export function QuestionFigure({ svg, images = [], scale, align, className, onRe
         }
     };
 
+    const previewButton = (src: string, markup?: string) => (
+        <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded border bg-background text-muted-foreground shadow-sm hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={t.figure.viewLarge}
+            title={t.figure.viewLarge}
+            onClick={(event) => { previewTrigger.current = event.currentTarget; setPreview({ src, svg: markup }); }}
+        >
+            <Maximize2 className="h-4 w-4" />
+        </button>
+    );
+
+    const svgImage = svg ? (
+        <img
+            src={figureSvgToDataUri(svg)}
+            alt={t.figure.alt}
+            className={cn("block h-auto max-w-full rounded border bg-white p-2", reading && "figure-readable-image")}
+            style={reading ? { ...imageStyle, width: `calc(${reading.width}px + 1rem + 2px)`, maxWidth: "none", maxHeight: "none" } : imageStyle}
+            onLoad={(event) => {
+                const image = event.currentTarget;
+                const size = getFigureReadingSize(svg, image.naturalWidth, image.naturalHeight);
+                setReadingSize((previous) => size
+                    ? previous?.svg === svg && previous.width === size.width ? previous : { svg, width: size.width }
+                    : previous === null ? previous : null);
+            }}
+        />
+    ) : null;
+
     return (
         <figure className={cn("question-figure my-3 space-y-3", className)}>
             {images.length > 0 ? images.map((image) => (
-                <div key={image.id} className="relative w-fit max-w-full">
-                    <img
-                        src={image.imageUrl}
-                        alt={t.figure.alt}
-                        className={cn(ALIGN_CLASS[figureAlign], "block h-auto max-w-full rounded border bg-white p-2")}
-                        style={imageStyle}
-                    />
-                    {onRemoveImage && (
+                <div key={image.id} className={cn("relative w-fit max-w-full", ALIGN_CLASS[figureAlign])} style={frameStyle}>
+                    <div className="flex items-center justify-end gap-1 pb-1 print:hidden">
+                        {previewButton(image.imageUrl)}
+                        {onRemoveImage && (
                         <button
                             type="button"
-                            className="absolute right-1 top-1 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white shadow hover:bg-black/80 disabled:opacity-50 print:hidden"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white shadow hover:bg-black/80 disabled:opacity-50"
                             aria-label={t.figure.removeManual}
                             title={t.figure.removeManual}
                             disabled={removingId !== null}
@@ -78,17 +109,26 @@ export function QuestionFigure({ svg, images = [], scale, align, className, onRe
                         >
                             {removingId === image.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
                         </button>
-                    )}
+                        )}
+                    </div>
+                    <img
+                        src={image.imageUrl}
+                        alt={t.figure.alt}
+                        className={cn(ALIGN_CLASS[figureAlign], "block h-auto max-w-full rounded border bg-white p-2")}
+                        style={imageStyle}
+                    />
                 </div>
             )) : (
-                <img
-                    src={figureSvgToDataUri(svg!)}
-                    alt={t.figure.alt}
-                    className={cn(ALIGN_CLASS[figureAlign], "block h-auto max-w-full rounded border bg-white p-2")}
-                    // zoom 同时改变显示尺寸和布局占位，打印时也生效；宽图缩小时同步收紧宽度上限。
-                    style={imageStyle}
-                />
+                <div className={cn("relative w-fit max-w-full", ALIGN_CLASS[figureAlign])} style={frameStyle}>
+                    <div className="flex justify-end pb-1 print:hidden">{previewButton(figureSvgToDataUri(svg!), svg!)}</div>
+                    {reading ? (
+                        <div className="figure-reading-region max-w-full overflow-auto overscroll-x-contain" style={{ maxHeight: "min(70dvh, 720px)" }} tabIndex={0} role="region" aria-label={t.figure.alt}>
+                            {svgImage}
+                        </div>
+                    ) : svgImage}
+                </div>
             )}
+            {preview && <FigureViewer key={preview.src} src={preview.src} svg={preview.svg} onClose={() => setPreview(null)} onReturnFocus={() => previewTrigger.current?.focus()} />}
         </figure>
     );
 }

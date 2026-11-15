@@ -203,6 +203,21 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId }: Student
 
                             {result && (
                                 <div className="space-y-3 border-t pt-3">
+                                    <div className="space-y-2 rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
+                                        <p className="font-medium">{t.studentAnswer.myAnswer}</p>
+                                        {result.userAnswer && <QuestionTextRenderer content={result.userAnswer} />}
+                                        {result.userAnswerImageUrl && (
+                                            <img
+                                                src={result.userAnswerImageUrl}
+                                                alt={t.studentAnswer.answerImage}
+                                                loading="lazy"
+                                                className="max-h-72 max-w-full rounded border bg-white object-contain"
+                                            />
+                                        )}
+                                        {!result.userAnswer && !result.userAnswerImageUrl && (
+                                            <p className="text-muted-foreground">{t.studentAnswer.noAnswerRecorded}</p>
+                                        )}
+                                    </div>
                                     <p className={`flex items-center gap-2 text-sm font-semibold ${result.status === "failed" || result.status === "pending" || result.status === "grading" ? "text-muted-foreground" : result.isCorrect ? "text-green-700 dark:text-green-400" : "text-destructive"}`}>
                                         {result.status === "pending" || result.status === "grading"
                                             ? <Loader2 className="size-4 animate-spin" />
@@ -256,15 +271,33 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId }: Student
                     )}
                     {questions.length === 0 && submission.answers.map((answer, index) => (
                         <Card key={answer.id} className="rounded-lg">
-                            <CardContent className="space-y-2 p-4">
+                            <CardContent className="space-y-3 p-4">
                                 <div className="flex items-start gap-3">
                                     <span className="text-sm font-semibold tabular-nums">{index + 1}.</span>
                                     <QuestionTextRenderer content={answer.questionText} className="min-w-0 flex-1 text-sm" />
+                                </div>
+                                {(answer.figureSvg || answer.imageFragments) && (
+                                    <QuestionFigure svg={answer.figureSvg} images={parseImageFragments(answer.imageFragments)} />
+                                )}
+                                <div className="space-y-2 rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
+                                    <p className="font-medium">{t.studentAnswer.myAnswer}</p>
+                                    {answer.userAnswer && <QuestionTextRenderer content={answer.userAnswer} />}
+                                    {answer.userAnswerImageUrl && (
+                                        <img src={answer.userAnswerImageUrl} alt={t.studentAnswer.answerImage} loading="lazy" className="max-h-72 max-w-full rounded border bg-white object-contain" />
+                                    )}
+                                    {!answer.userAnswer && !answer.userAnswerImageUrl && <p className="text-muted-foreground">{t.studentAnswer.noAnswerRecorded}</p>}
                                 </div>
                                 <p className={`text-sm font-medium ${answer.isCorrect ? "text-green-700 dark:text-green-400" : "text-destructive"}`}>
                                     {answer.status === "failed" ? t.studentAnswer.failed : answer.isCorrect ? t.studentAnswer.correct : t.studentAnswer.incorrect}
                                     {answer.reason ? ` · ${answer.reason}` : ""}
                                 </p>
+                                {answer.mistakeAnalysis && <p className="text-sm"><span className="font-medium">{t.studentAnswer.mistake}：</span>{answer.mistakeAnalysis}</p>}
+                                {answer.status === "graded" && answer.answerText && (
+                                    <div className="space-y-2 rounded-md bg-muted/50 p-3 text-sm">
+                                        <p><span className="font-medium">{t.studentAnswer.referenceAnswer}：</span>{answer.answerText}</p>
+                                        {answer.analysis && <p><span className="font-medium">{t.studentAnswer.analysis}：</span>{answer.analysis}</p>}
+                                    </div>
+                                )}
                             </CardContent>
                         </Card>
                     ))}

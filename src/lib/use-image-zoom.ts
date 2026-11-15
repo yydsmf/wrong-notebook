@@ -10,13 +10,12 @@ const WHEEL_SENSITIVITY = 0.0015;
 const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
 
 interface ZoomAnchor {
-    /** 锚点相对滚动容器可视区左上角的位置 */
+    /** 锚点相对滚动容器内边界的位置 */
     viewX: number;
     viewY: number;
-    /** 锚点在内容中的位置（缩放前） */
-    contentX: number;
-    contentY: number;
-    ratio: number;
+    /** 锚点在图片中的相对位置，不包含居中留白和容器内边距 */
+    imageX: number;
+    imageY: number;
 }
 
 /**
@@ -47,20 +46,27 @@ export function useImageZoom(fitStyle: CSSProperties) {
         const target = clampZoom(next);
         if (!container || target === current) return;
 
+        const image = container.querySelector("img");
+        const imageRect = image?.getBoundingClientRect();
+        if (!imageRect || imageRect.width <= 0 || imageRect.height <= 0) return;
+
         // 从 100% 开始缩放时重新测量适应尺寸（窗口大小可能已变化）
-        if (current === MIN_ZOOM) {
-            const image = container.querySelector("img");
-            if (image) setBaseWidth(image.clientWidth);
-        }
+        if (current === MIN_ZOOM) setBaseWidth(imageRect.width);
         const rect = container.getBoundingClientRect();
-        const viewX = (clientX ?? rect.left + rect.width / 2) - rect.left;
-        const viewY = (clientY ?? rect.top + rect.height / 2) - rect.top;
+        const left = rect.left + container.clientLeft;
+        const top = rect.top + container.clientTop;
+        const visibleLeft = Math.max(left, imageRect.left);
+        const visibleTop = Math.max(top, imageRect.top);
+        const visibleRight = Math.min(left + container.clientWidth, imageRect.right);
+        const visibleBottom = Math.min(top + container.clientHeight, imageRect.bottom);
+        if (visibleRight <= visibleLeft || visibleBottom <= visibleTop) return;
+        const x = Math.min(visibleRight, Math.max(visibleLeft, clientX ?? (visibleLeft + visibleRight) / 2));
+        const y = Math.min(visibleBottom, Math.max(visibleTop, clientY ?? (visibleTop + visibleBottom) / 2));
         anchorRef.current = {
-            viewX,
-            viewY,
-            contentX: container.scrollLeft + viewX,
-            contentY: container.scrollTop + viewY,
-            ratio: target / current,
+            viewX: x - left,
+            viewY: y - top,
+            imageX: (x - imageRect.left) / imageRect.width,
+            imageY: (y - imageRect.top) / imageRect.height,
         };
         zoomRef.current = target;
         setZoomState(target);
@@ -70,10 +76,14 @@ export function useImageZoom(fitStyle: CSSProperties) {
     useLayoutEffect(() => {
         const container = containerElRef.current;
         const anchor = anchorRef.current;
-        if (!container || !anchor) return;
-        container.scrollLeft = anchor.contentX * anchor.ratio - anchor.viewX;
-        container.scrollTop = anchor.contentY * anchor.ratio - anchor.viewY;
         anchorRef.current = null;
+        const image = container?.querySelector("img");
+        if (!container || !anchor || !image) return;
+        const rect = container.getBoundingClientRect();
+        const imageRect = image.getBoundingClientRect();
+        // 使用更新后的图片边界，兼容居中、边框、内边距和已有滚动位置。
+        container.scrollLeft += imageRect.left + anchor.imageX * imageRect.width - rect.left - container.clientLeft - anchor.viewX;
+        container.scrollTop += imageRect.top + anchor.imageY * imageRect.height - rect.top - container.clientTop - anchor.viewY;
     }, [zoom]);
 
     // 滚轮与双指捏合需要阻止浏览器默认行为，只能用非 passive 的原生监听

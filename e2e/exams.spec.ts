@@ -36,9 +36,15 @@ for (const profile of viewports) {
             await expect(printed).toHaveCount(2);
             const printedA = printed.nth(questions.findIndex((question) => question.id === questionA.id));
             await expect(printedA).toHaveCSS('zoom', '0.5');
-            await expect(printedA).toHaveClass(/ml-auto/);
+            await expect(printedA.locator('..')).toHaveClass(/ml-auto/);
             await printedA.evaluate((element: HTMLImageElement) => element.decode());
             await expect.poll(() => printedA.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(0);
+            const figure = printedA.locator('xpath=ancestor::figure');
+            await expect.poll(async () => {
+                const imageBox = await printedA.boundingBox();
+                const figureBox = await figure.boundingBox();
+                return imageBox && figureBox ? Math.abs(imageBox.x + imageBox.width - figureBox.x - figureBox.width) : Infinity;
+            }).toBeLessThanOrEqual(2);
             await page.emulateMedia({ media: 'screen' });
             await page.goto(`/exams/${id}`);
             await page.getByRole('button', { name: '录入结果', exact: true }).click();

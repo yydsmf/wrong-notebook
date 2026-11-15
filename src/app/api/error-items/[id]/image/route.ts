@@ -42,7 +42,7 @@ export async function PUT(
             return notFound("Item not found");
         }
 
-        await prisma.errorItem.update({ where: { id }, data: { originalImageUrl: parsed.data.imageDataUrl } });
+        await prisma.errorItem.update({ where: { id }, data: { originalImageUrl: parsed.data.imageDataUrl, originalImageUrls: null } });
         logger.info({ errorItemId: id, imageLength: parsed.data.imageDataUrl.length }, 'Original image replaced');
         return NextResponse.json({ originalImageUrl: parsed.data.imageDataUrl });
     } catch (error) {

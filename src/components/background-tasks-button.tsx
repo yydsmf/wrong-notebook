@@ -12,12 +12,14 @@ import { useTimeZone } from "@/contexts/TimeZoneContext";
 import { apiClient } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/date-time";
 import { toast } from "@/lib/feedback";
+import { storeRetryImport } from '@/lib/retry-import-transfer';
 import type { BackgroundTask } from "@/lib/background-tasks";
 
 interface RetryImportResponse {
     retryImport?: {
         parsedData: unknown;
         imageBase64: string;
+        images?: string[];
         subjectId: string | null;
         confirmBeforeImport: boolean;
         returnPath: string;
@@ -28,8 +30,8 @@ interface RetryImportResponse {
 const OPEN_POLL_MS = 2000;
 const CLOSED_POLL_MS = 15000;
 
-// 登录、注册和打印页面不显示
-const HIDDEN_PATHS = [/^\/login/, /^\/register/, /^\/print-preview/, /^\/exams\/[^/]+\/print/];
+// 登录、注册、安装向导和打印页面不显示
+const HIDDEN_PATHS = [/^\/login/, /^\/register/, /^\/setup(?:\/|$)/, /^\/print-preview/, /^\/exams\/[^/]+\/print/];
 
 function formatElapsed(fromIso: string, toIso: string | null, now: number): string {
     const seconds = Math.max(0, Math.round(((toIso ? Date.parse(toIso) : now) - Date.parse(fromIso)) / 1000));
@@ -51,13 +53,14 @@ export function BackgroundTasksButton() {
     const [now, setNow] = useState(() => Date.now());
     const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null);
 
-    const hidden = status !== "authenticated" || session?.user?.role !== "admin"
+    const hidden = status !== "authenticated" || session?.user?.role !== "admin" || session.user.mustChangePassword === true
         || HIDDEN_PATHS.some((pattern) => pattern.test(pathname || ""));
 
     const refresh = useCallback(async () => {
         if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
         try {
             const result = await apiClient.get<{ tasks: BackgroundTask[] }>("/api/tasks");
+            if (!Array.isArray(result?.tasks)) return;
             setTasks(result.tasks);
             setNow(Date.now());
         } catch {
@@ -89,6 +92,7 @@ export function BackgroundTasksButton() {
     const clearFinished = async () => {
         try {
             const result = await apiClient.delete<{ tasks: BackgroundTask[] }>("/api/tasks");
+            if (!Array.isArray(result?.tasks)) return;
             setTasks(result.tasks);
         } catch {
             // 忽略，下次轮询会刷新
@@ -102,7 +106,7 @@ export function BackgroundTasksButton() {
             const result = await apiClient.post<RetryImportResponse>(`/api/tasks/${task.id}/retry`, {}, { timeout: 10 * 60 * 1000, recoverable: true });
             if (result?.retryImport) {
                 try {
-                    sessionStorage.setItem("background-task-retry-import", JSON.stringify(result.retryImport));
+                    storeRetryImport(result.retryImport);
                 } catch {
                     toast.error(t.backgroundTasks.retryImportRestoreFailed);
                     await refresh();

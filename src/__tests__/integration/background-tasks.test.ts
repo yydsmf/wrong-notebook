@@ -76,13 +76,13 @@ describe('PUT /api/error-items/:id/image', () => {
     const put = (body: unknown) => REPLACE_IMAGE(new Request('http://localhost', { method: 'PUT', body: JSON.stringify(body) }), context);
     const image = 'data:image/jpeg;base64,QUJDRA==';
 
-    it('替换为新的原题图片', async () => {
+    it('替换为新的原题图片时同步清空旧的多图列表', async () => {
         mocks.errorItem.findUnique.mockResolvedValue({ userId: 'user-1' });
 
         const response = await put({ imageDataUrl: image });
 
         expect(response.status).toBe(200);
-        expect(mocks.errorItem.update).toHaveBeenCalledWith({ where: { id: 'e1' }, data: { originalImageUrl: image } });
+        expect(mocks.errorItem.update).toHaveBeenCalledWith({ where: { id: 'e1' }, data: { originalImageUrl: image, originalImageUrls: null } });
     });
 
     it.each([

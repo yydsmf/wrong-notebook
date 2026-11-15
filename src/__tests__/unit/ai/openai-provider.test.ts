@@ -4,6 +4,7 @@
  * 测试 OpenAI 服务初始化、响应解析和错误处理
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { FIGURE_GROUP_PROVIDER_RESPONSE } from '@/__tests__/fixtures/figure-group-fixtures';
 
 const mockCompletionCreate = vi.hoisted(() => vi.fn());
 
@@ -127,15 +128,42 @@ describe('OpenAI Provider 响应解析', () => {
             expect(result.figureSvg).toContain('<circle r="2"/>');
         });
 
+        it('举一反三的竖式与新题数字矛盾时回退完整旧 SVG', async () => {
+            mockCompletionCreate.mockResolvedValue({ choices: [{ finish_reason: 'stop', message: { content: '<question_text>请列竖式计算34×25。</question_text><answer_text>850</answer_text><analysis>计算</analysis><has_figure>true</has_figure><figure_spec>{"type":"vertical_arithmetic","operation":"×","top":"43","bottom":"25","partialProducts":[]}</figure_spec><figure_svg><svg><text>旧图</text></svg></figure_svg>' } }] });
+
+            const result = await provider.generateSimilarQuestion('求两位数乘25', []);
+
+            expect(result.figureSvg).toContain('旧图');
+            expect(result.figureSvg).not.toContain('data-arithmetic-row');
+        });
+
         it('单独重绘配图：发送原题图片并解析结果', async () => {
             mockCompletionCreate.mockResolvedValue({ choices: [{ finish_reason: 'stop', message: { content: '<has_figure>true</has_figure><figure_svg><svg><line x1="0" y1="0" x2="1" y2="1"/></svg></figure_svg>' } }] });
 
-            const figure = await provider.generateFigureSvg('QUJD', 'image/png', '如图');
+            const figure = await provider.generateFigureSvg('QUJD', 'image/png', '如图', [{ base64: 'REVG', mimeType: 'image/jpeg' }]);
 
             const request = mockCompletionCreate.mock.calls[0][0];
             expect(request.messages[1].content[0].image_url.url).toBe('data:image/png;base64,QUJD');
+            expect(request.messages[1].content[1].image_url.url).toBe('data:image/jpeg;base64,REVG');
             expect(figure.hasFigure).toBe(true);
             expect(figure.figureSvg).toContain('<line');
+        });
+
+        it('结构化配图校验使用目标题干，矛盾时回退完整旧 SVG', async () => {
+            mockCompletionCreate.mockResolvedValue({ choices: [{ finish_reason: 'stop', message: { content: '<has_figure>true</has_figure><figure_spec>{"type":"vertical_arithmetic","operation":"×","top":"43","bottom":"25","partialProducts":[]}</figure_spec><figure_svg><svg><text>旧图</text></svg></figure_svg>' } }] });
+
+            const figure = await provider.generateFigureSvg('QUJD', 'image/png', '请列竖式计算34×25。');
+
+            expect(figure.figureSvg).toContain('旧图');
+            expect(figure.figureSvg).not.toContain('data-arithmetic-row');
+        });
+
+        it('从同一次配图响应解析结构化四选项图组', async () => {
+            mockCompletionCreate.mockResolvedValue({ choices: [{ finish_reason: 'stop', message: { content: FIGURE_GROUP_PROVIDER_RESPONSE } }] });
+            const figure = await provider.generateFigureSvg('QUJD', 'image/png', '比较选项');
+            expect(mockCompletionCreate).toHaveBeenCalledTimes(1);
+            expect(figure.figureSvg?.match(/data-figure-panel=/g)).toHaveLength(4);
+            expect(figure.figureSvg).not.toContain('legacy');
         });
 
         it('解析难度星级标签，缺失或非法时为 null', () => {

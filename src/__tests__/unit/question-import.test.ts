@@ -10,6 +10,13 @@ const parsed: ParsedQuestion = { questionText: '题目', answerText: '答案', a
 beforeEach(() => vi.mocked(apiClient.post).mockReset());
 
 describe('免确认与批量录入传递识别年级', () => {
+    it('单题多图保存时携带完整列表，不重复发送首图', async () => {
+        const imageUrls = ['data:image/png;base64,QQ==', 'data:image/jpeg;base64,Qg=='];
+        vi.mocked(apiClient.post).mockResolvedValue({ id: 'e1' });
+        await saveParsedQuestion(parsed, { imageUrls });
+        expect(vi.mocked(apiClient.post).mock.calls[0][1]).toMatchObject({ originalImageUrls: imageUrls });
+        expect(vi.mocked(apiClient.post).mock.calls[0][1]).not.toHaveProperty('originalImageUrl');
+    });
     it.each(['四年级下', null])('直接保存保留识别结果 %s，区分人工年级', async (gradeSemester) => {
         vi.mocked(apiClient.post).mockResolvedValue({ id: 'e1' });
         await saveParsedQuestion({ ...parsed, gradeSemester }, {});
@@ -21,6 +28,7 @@ describe('免确认与批量录入传递识别年级', () => {
     it('框选批量流程不会在识别到保存之间丢弃年级', async () => {
         vi.mocked(apiClient.post).mockResolvedValueOnce(parsed).mockResolvedValueOnce({ id: 'e1' });
         await importQuestionImage(new Blob(['test'], { type: 'image/png' }), { language: 'en' });
+        expect(vi.mocked(apiClient.post).mock.calls[0][1]).toMatchObject({ autoSave: true });
         expect(vi.mocked(apiClient.post).mock.calls[1][1]).toMatchObject({ recognizedGradeSemester: '四年级下' });
     });
 });

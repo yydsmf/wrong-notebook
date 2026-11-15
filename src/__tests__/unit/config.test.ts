@@ -174,6 +174,13 @@ describe('config module', () => {
             expect(config.gemini).toBeDefined();
         });
 
+        it('旧版默认 3 分钟超时会升级为 10 分钟', async () => {
+            vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ timeouts: { analyze: 180000 } }));
+
+            const { getAppConfig } = await import('@/lib/config');
+            expect(getAppConfig().timeouts?.analyze).toBe(600000);
+        });
+
         it('应该在配置文件解析失败时返回默认值', async () => {
             vi.mocked(fs.readFileSync).mockReturnValue('invalid json{');
 

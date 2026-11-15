@@ -98,7 +98,7 @@ export async function GET(req: Request) {
         ]));
 
         const exportData = {
-            version: 6,
+            version: 7,
             exportedAt: new Date().toISOString(),
             scope: exportAll ? 'all' : 'user',
             user: {

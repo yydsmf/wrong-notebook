@@ -16,7 +16,10 @@ const mocks = vi.hoisted(() => ({
     confirmBeforeImport: false,
     saveParsedQuestion: vi.fn(),
     toastError: vi.fn(),
+    toastInfo: vi.fn(),
     toastSuccess: vi.fn(),
+    prepareImage: vi.fn(),
+    renderRegion: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mocks.push }) }));
@@ -26,7 +29,12 @@ vi.mock('@/lib/question-import', () => ({
     saveParsedQuestion: mocks.saveParsedQuestion,
 }));
 vi.mock('@/lib/image-utils', () => ({ processImageFile: vi.fn(async () => 'data:image/jpeg;base64,AAAA') }));
-vi.mock('@/lib/feedback', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }));
+vi.mock('@/lib/image-pipeline', () => ({
+    prepareImage: mocks.prepareImage,
+    renderRegion: mocks.renderRegion,
+    ImageDecodeError: class extends Error {},
+}));
+vi.mock('@/lib/feedback', () => ({ toast: { error: mocks.toastError, info: mocks.toastInfo, success: mocks.toastSuccess, warning: vi.fn() } }));
 vi.mock('@/lib/frontend-logger', () => ({ frontendLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 const parsed = { questionText: '1 + 1 = ?', answerText: '2', analysis: '加法', knowledgePoints: ['加法'], subject: '数学', requiresImage: false };
@@ -65,24 +73,104 @@ beforeEach(() => {
 afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
 });
 
 describe('题目导入流程', () => {
+    it('多选图片单题裁剪，全部确认后只识别一次并将所有原图存到同一道题', async () => {
+        const first = new File(['first'], 'first.png', { type: 'image/png' });
+        const second = new File(['second'], 'second.png', { type: 'image/png' });
+        const region = { x: 0, y: 0, width: 1, height: 1 };
+        mocks.prepareImage
+            .mockResolvedValueOnce({ previewUrl: 'blob:first', dispose: vi.fn() })
+            .mockResolvedValueOnce({ previewUrl: 'blob:second', dispose: vi.fn() });
+        mocks.renderRegion
+            .mockResolvedValueOnce({ dataUrl: 'data:image/png;base64,QQ==' })
+            .mockResolvedValueOnce({ dataUrl: 'data:image/png;base64,Qg==' });
+        mocks.post.mockResolvedValueOnce(parsed);
+        await render();
+        await act(async () => flow.selectImages([first, second]));
+        expect(flow.croppingImage).toBe('blob:first');
+        await act(async () => flow.cropRegions([region], false));
+        expect(flow.croppingImage).toBe('blob:second');
+        expect(flow.batchBlobs).toBeNull();
+        expect(mocks.post).not.toHaveBeenCalled();
+        await act(async () => flow.cropRegions([region], false));
+        expect(flow.batchBlobs).toBeNull();
+        expect(flow.isCropperOpen).toBe(false);
+        expect(flow.isBusy).toBe(false);
+        expect(mocks.post).toHaveBeenCalledExactlyOnceWith('/api/analyze', expect.objectContaining({
+            images: ['data:image/png;base64,QQ==', 'data:image/png;base64,Qg=='],
+        }), expect.any(Object));
+        expect(mocks.post.mock.calls[0][1]).not.toHaveProperty('imageBase64');
+        expect(mocks.saveParsedQuestion).toHaveBeenCalledExactlyOnceWith(parsed, {
+            subjectId: undefined, imageUrls: ['data:image/png;base64,QQ==', 'data:image/png;base64,Qg=='],
+        });
+    });
+
+    it('主动选择多题框选才进入批量导入，各张图的框保留顺序', async () => {
+        const files = [new File(['a'], 'a.png'), new File(['b'], 'b.png')];
+        mocks.prepareImage.mockResolvedValueOnce({ previewUrl: 'blob:a', dispose: vi.fn() }).mockResolvedValueOnce({ previewUrl: 'blob:b', dispose: vi.fn() });
+        mocks.renderRegion.mockResolvedValueOnce({ dataUrl: 'data:image/png;base64,QQ==' }).mockResolvedValueOnce({ dataUrl: 'data:image/png;base64,Qg==' });
+        const region = { x: 0, y: 0, width: 1, height: 1 };
+        await render();
+        await act(async () => flow.selectImages(files));
+        await act(async () => flow.cropRegions([region], true));
+        expect(flow.cropMode).toBe('multi');
+        await act(async () => flow.cropRegions([region], true));
+        expect(flow.batchBlobs).toHaveLength(2);
+        expect(await Promise.all(flow.batchBlobs!.map(blob => blob.text()))).toEqual(['A', 'B']);
+        expect(mocks.post).not.toHaveBeenCalled();
+        expect(mocks.saveParsedQuestion).not.toHaveBeenCalled();
+    });
+
+    it('单选图片裁剪后仍使用既有单题识别与保存逻辑', async () => {
+        mocks.prepareImage.mockResolvedValueOnce({ previewUrl: 'blob:first', dispose: vi.fn() });
+        mocks.renderRegion.mockResolvedValueOnce({ dataUrl: 'data:image/png;base64,QQ==' });
+        mocks.post.mockResolvedValueOnce(parsed);
+        await render({ importSubjectId: 'nb-1' });
+        await act(async () => flow.selectImages([new File(['first'], 'first.png', { type: 'image/png' })]));
+        await act(async () => flow.cropRegions([{ x: 0, y: 0, width: 1, height: 1 }], false, 90));
+        expect(mocks.post).toHaveBeenCalledWith('/api/analyze', expect.objectContaining({ imageBase64: 'data:image/png;base64,QQ==' }), expect.any(Object));
+        expect(mocks.saveParsedQuestion).toHaveBeenCalledWith(parsed, { subjectId: 'nb-1', imageUrls: ['data:image/png;base64,QQ=='] });
+        expect(flow.batchBlobs).toBeNull();
+        expect(flow.lastImported).toEqual({ id: 'saved', duplicate: false });
+    });
+
     it('未开启人工确认时识别后直接入库，不进入校对页', async () => {
         const onParsed = vi.fn();
-        mocks.post.mockResolvedValueOnce(parsed);
+        mocks.post.mockResolvedValueOnce({ ...parsed, importedQuestion: { id: 'server-saved', shortId: 'q1', subjectId: 'nb-1', notebookName: '数学' } });
         await render({ analyzeSubjectId: 'nb-1', importSubjectId: 'nb-1', onParsed });
 
         await act(async () => flow.cropComplete(new Blob(['x'])));
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
 
-        expect(mocks.post).toHaveBeenCalledWith('/api/analyze', expect.objectContaining({ imageBase64: 'data:image/jpeg;base64,AAAA', subjectId: 'nb-1', returnPath: '/?notebook=nb-1' }), expect.objectContaining({ timeout: 120000, recoverable: true, onProgress: expect.any(Function) }));
-        expect(mocks.saveParsedQuestion).toHaveBeenCalledWith(parsed, { subjectId: 'nb-1', imageUrl: 'data:image/jpeg;base64,AAAA' });
-        expect(flow.lastImported).toEqual({ id: 'saved', duplicate: false });
+        expect(mocks.post).toHaveBeenCalledWith('/api/analyze', expect.objectContaining({ imageBase64: 'data:image/jpeg;base64,AAAA', subjectId: 'nb-1', autoSave: true, returnPath: '/?notebook=nb-1' }), expect.objectContaining({ timeout: 120000, recoverable: true, onProgress: expect.any(Function) }));
+        expect(mocks.saveParsedQuestion).not.toHaveBeenCalled();
+        expect(flow.lastImported).toEqual({ id: 'server-saved', shortId: 'q1', subjectId: 'nb-1', notebookName: '数学' });
         expect(flow.step).toBe('upload');
         expect(onParsed).not.toHaveBeenCalled();
         expect(flow.analysisStep).toBe('idle');
+    });
+
+    it('前台等待 1 分钟后只关闭遮罩，请求仍可在后台完成', async () => {
+        vi.useFakeTimers();
+        let resolve!: (value: unknown) => void;
+        mocks.post.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+        await render({ analyzeSubjectId: 'nb-1' });
+
+        await act(async () => flow.cropComplete(new Blob(['x'])));
+        await act(async () => { vi.advanceTimersByTime(60_000); });
+        expect(flow.analysisStep).toBe('idle');
+        expect(mocks.toastInfo).toHaveBeenCalled();
+
+        await act(async () => {
+            resolve({ ...parsed, importedQuestion: { id: 'background-saved', shortId: 'q2', subjectId: 'nb-1', notebookName: '数学' } });
+            await Promise.resolve();
+        });
+        expect(flow.lastImported).toMatchObject({ id: 'background-saved' });
+        vi.useRealTimers();
     });
 
     it('开启人工确认时进入校对页，保存到固定错题本后跳转', async () => {
@@ -110,6 +198,7 @@ describe('题目导入流程', () => {
         sessionStorage.setItem('background-task-retry-import', JSON.stringify({
             parsedData: parsed,
             imageBase64: 'data:image/jpeg;base64,RETRIED',
+            images: ['data:image/jpeg;base64,RETRIED', 'data:image/png;base64,SECOND'],
             subjectId: 'nb-4',
             confirmBeforeImport: true,
         }));
@@ -120,9 +209,14 @@ describe('题目导入流程', () => {
         expect(flow.step).toBe('review');
         expect(flow.parsedData).toEqual(parsed);
         expect(flow.currentImage).toBe('data:image/jpeg;base64,RETRIED');
+        expect(flow.currentImages).toEqual(['data:image/jpeg;base64,RETRIED', 'data:image/png;base64,SECOND']);
         expect(onParsed).toHaveBeenCalledWith(parsed);
         expect(sessionStorage.getItem('background-task-retry-import')).toBeNull();
         expect(mocks.saveParsedQuestion).not.toHaveBeenCalled();
+        mocks.post.mockResolvedValueOnce({ id: 'saved' });
+        await act(async () => flow.saveReviewed(parsed as never));
+        expect(mocks.post).toHaveBeenLastCalledWith('/api/error-items', expect.objectContaining({ originalImageUrls: ['data:image/jpeg;base64,RETRIED', 'data:image/png;base64,SECOND'] }));
+        expect(mocks.post.mock.calls.at(-1)?.[1]).not.toHaveProperty('originalImageUrl');
     });
 
     it('后台识别重试关闭人工确认时调用原有直接保存流程', async () => {
@@ -136,7 +230,7 @@ describe('题目导入流程', () => {
         await render({ importSubjectId: 'nb-4' });
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
 
-        expect(mocks.saveParsedQuestion).toHaveBeenCalledWith(parsed, { subjectId: 'nb-4', imageUrl: 'data:image/jpeg;base64,RETRIED' });
+        expect(mocks.saveParsedQuestion).toHaveBeenCalledWith(parsed, { subjectId: 'nb-4', imageUrls: ['data:image/jpeg;base64,RETRIED'] });
         expect(flow.step).toBe('upload');
         expect(flow.lastImported).toEqual({ id: 'saved', duplicate: false });
     });

@@ -21,6 +21,31 @@ function annotations(content: string): string[] {
 }
 
 describe('LaTeX 公式渲染', () => {
+    it('display 公式闭合符后紧跟中文时仍结束公式并渲染后文', () => {
+        const content = '先算除法，再算加法。\n$$\\frac{3}{7}\\div\\frac{2}{3}+\\frac{3}{7}\\div\\frac{4}{5}\n=\\frac{3}{7}\\times\\frac{3}{2}+\\frac{3}{7}\\times\\frac{5}{4}\n=\\frac{9}{14}+\\frac{15}{28}。\n$$两个分数的分母不同，先通分。\n$$\\frac{9}{14}+\\frac{15}{28}\n=\\frac{18}{28}+\\frac{15}{28}\n=\\frac{33}{28}。\n$$注意：分数除法转化为乘法时，只把除数变成它的倒数。';
+        const html = renderToStaticMarkup(<MarkdownRenderer content={content} />);
+
+        expect((html.match(/class="katex"/g) || [])).toHaveLength(2);
+        expect(html).not.toContain('katex-error');
+        expect(html).toContain('两个分数的分母不同，先通分。');
+        expect(html).toContain('注意：分数除法转化为乘法时');
+        expect(annotations(content).every((tex) => tex.includes('\\text{。}'))).toBe(true);
+        expect(html).toContain('。');
+    });
+
+    it.each([
+        ['含单位的计算式后直接接中文', '$$45+30=75\\text{（棵）}$$再用增加的棵数除以原来的棵数。', '再用增加的棵数'],
+        ['句号在闭合符前且闭合符前有换行', '$$\\frac{17}{57}\\times19=\\frac{17}{3}。\n$$注意：约分后计算。', '注意：约分后计算。'],
+        ['带中文单位的长公式以句号结尾', '$$300\\div\\left(1+\\frac{1}{4}\\right)=240\\text{（千米/时）}。$$因此，速度是240千米/时。', '因此，速度是240千米/时。'],
+    ])('%s', (_name, content, followingText) => {
+        const html = renderToStaticMarkup(<MarkdownRenderer content={content} />);
+
+        expect(countFormulas(content)).toBe(1);
+        expect(html).not.toContain('katex-error');
+        expect(html).toContain(followingText);
+        expect(html).toContain('。');
+    });
+
     it('渲染 $…$ 和 $$…$$，公式紧贴中文时也能识别', () => {
         expect(countFormulas('求 $\\frac{1}{2}$ 的值')).toBe(1);
         expect(countFormulas('面积为$S=6$平方厘米')).toBe(1);

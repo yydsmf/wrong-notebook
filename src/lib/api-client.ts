@@ -155,12 +155,11 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
         try {
             return await res.json();
         } catch {
-            // If JSON parse fails but response was OK, return text or empty object?
-            // For now, assume JSON APIs.
+            // If JSON parse fails but response was OK, preserve the existing
+            // API client's tolerant behavior for legacy/proxy responses.
             return {} as T;
         }
     } catch (error) {
-        clearTimeout(timeoutId);
         if (error instanceof Error && error.name === 'AbortError') {
             throw new ApiError(408, 'Request Timeout', {
                 message: 'AI_TIMEOUT_ERROR'

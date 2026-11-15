@@ -15,6 +15,8 @@ import { getFixedQuestionGrade, resolveQuestionGrade } from "@/lib/question-grad
 import { getAppTimeZone } from "@/lib/config";
 import { updateStoredResponseProgressFromRequest } from "@/lib/recoverable-response";
 import type { RequestProgress } from "@/lib/request-progress";
+import { parseImageInput, questionImagesSchema } from '@/lib/ai/image-input';
+import type { AIImageInput } from '@/lib/ai/image-input';
 
 const logger = createLogger('api:reanswer');
 
@@ -33,7 +35,20 @@ async function handlePost(req: Request) {
 
     try {
         const body = await req.json();
-        const { questionText, language = 'zh', subject, imageBase64, gradeSemester, subjectId, forImport } = body;
+        const { questionText, language = 'zh', subject, gradeSemester, subjectId, forImport } = body;
+        let imageBase64: string | undefined = body.imageBase64;
+        let additionalImages: AIImageInput[] | undefined;
+        if (body.images !== undefined) {
+            const parsed = questionImagesSchema.safeParse(body.images);
+            if (!parsed.success) return badRequest('Invalid image data');
+            try {
+                const images = parsed.data.map(image => parseImageInput(image));
+                imageBase64 = parsed.data[0];
+                additionalImages = images.slice(1);
+            } catch {
+                return badRequest('Invalid image data URL');
+            }
+        }
 
         logger.debug({
             questionLength: questionText?.length,
@@ -74,7 +89,7 @@ async function handlePost(req: Request) {
         const result = await trackBackgroundTaskForRequest(
             req,
             { userId: session.user.id, kind: 'reanswer', subject: describeQuestion({ questionText }), retryRequest: { path: '/api/reanswer', body } },
-            () => aiService.reanswerQuestion(questionText, language, subject, imageBase64, targetGrade, candidateTags)
+            () => aiService.reanswerQuestion(questionText, language, subject, imageBase64, targetGrade, candidateTags, ...(additionalImages?.length ? [additionalImages] : []))
         );
         updateProgress({ stage: 'collecting', percent: 90 });
 

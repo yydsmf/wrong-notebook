@@ -135,7 +135,7 @@ export function generateFieldLanguageInstruction(language: 'zh' | 'en', generate
 
 export const QUESTION_OUTPUT_TAGS = {
   analyze: ['subject', 'knowledge_points', 'requires_image', 'has_figure', 'figure_description', 'wrong_answer_text', 'mistake_status', 'difficulty_stars', 'mistake_analysis', 'question_text', 'answer_text', 'analysis', 'grade_semester'],
-  similar: ['question_text', 'answer_text', 'analysis', 'figure_svg'],
+  similar: ['question_text', 'answer_text', 'analysis', 'figure_spec', 'figure_svg'],
   reanswer: ['answer_text', 'analysis', 'knowledge_points', 'wrong_answer_text', 'mistake_status', 'mistake_analysis', 'subject', 'difficulty_stars', 'grade_semester'],
 } as const;
 
@@ -211,6 +211,36 @@ export const FIGURE_SVG_RULES = `- 输出一个完整的 <svg> 元素，包含 x
 - 只使用基本图形元素：line、polyline、polygon、rect、circle、ellipse、path、text、g、defs、marker。
 - 严禁使用 <image>、<script>、<foreignObject>、外部链接、外部字体或事件属性。`;
 
+/** 结构化配图规则：模型只识别数据，程序按固定模板绘制 SVG。 */
+export const FIGURE_SPEC_RULES = `【结构化配图优先规则】
+- 优先输出一个 JSON 对象描述图形结构，程序会按模板绘制 SVG；不要在 JSON 中写 SVG、HTML、Markdown 或解释文字。
+- 只允许以下 type：vertical_arithmetic、fraction、number_line、coordinate_plane、circle_geometry、area_geometry、solid_geometry、basic_geometry、bar_chart、line_chart、grid_shape、table、figure_group。
+- 无法用这些类型准确表达时，figure_spec 留空，再把完整配图放入 figure_svg；不要为了套模板而猜测数据。
+- 所有题目中的数字、单位、字母、甲乙标签和相对位置必须以目标题干和参考图片为准，不能复制旧题数据。
+- 题干明确声明主图形状时，figure_spec 必须画出对应形状并核对相对尺寸与标注；允许用等边矩形表达正方形、等棱长方体表达正方体。仅出现形状词、平方单位、形状判断题、阴影或截面等局部图、多形状或图组时，不要把单一形状条件套到所有图；无法确认就留空 figure_spec。
+- 声明之后的面积、周长或体积求值提问不能取消前面的明确形状条件，不能因整题带问号而跳过形状核对。例如“下图是一个正方形，面积是多少？”与“The figure is a square. What is its area?”仍须画正方形。形状疑问、命题判断、待证明、假设条件或引用内容不作为既定事实，例如“下图是一个正方形吗？”、“请证明下图是正方形”、“若下图是正方形”及“The figure is a square. True or false?”；不要为套模板而替题目作出判断。
+- vertical_arithmetic：{type,operation,top,bottom,partialProducts:[{value,label?,shift?}],result?,note?}。shift 表示从右侧向左错开几位；竖式中的横线、运算符和每一行数字由程序绘制。只有能从目标题干和参考图确认数字、标签和位移时才输出；不能确认就留空 figure_spec，不要猜部分积或结果。
+- 结构化竖式必须先和目标题干交叉核对：题干明确写出 34×25、34乘25 或“两位数乘25”时，top、bottom 和明确的位数必须一致；题干只说未知数、故事数字或列出多个候选算式时不要猜测对应关系。矛盾时留空 figure_spec，让完整旧 SVG、原图或手动配图兜底。
+- 核对竖式时必须保留完整的小数、正负号和运算符，3.4×25 不能截成4×25；分数斜线不能直接当作除法。含括号、分数、字母、指数或连续运算时，不要只抽取其中两个整数作为整张竖式的条件，无法确认各步骤的对应关系就留空 figure_spec。未知填空仍按原图保留，不能因此补出答案。
+- 竖式中的 □、问号、下划线及未知数字必须按题图保留，不得把作答空格替换为计算结果；原图没有最终结果就省略 result。乘法每行应明确 shift（个位为 0、十位为 1），省略时按行号从 0 递增；跳过乘数中的 0 时必须显式声明实际数位。不同部分积不能重复使用同一 shift，已知整数乘数时 shift 不能超出它的位数。纯整数复算不能证明转录的因数与原图一致，仍须逐项核对原题。
+- fraction：{type,numerator,denominator,whole?,model:"fraction"|"bar"|"circle",parts?,filled?,label?}。上下结构必须分别填 numerator 和 denominator，不能压成普通横线；使用 bar/circle 时 parts 必须等于 denominator、filled 必须等于 numerator（仅在两者都是明确整数时），分子、分母或分割数量不确定时留空 figure_spec。
+- 带分数必须保留 whole，不能只输出余下分数。bar/circle 图示支持 whole 为 0~5 的明确非负整数，程序会用相同尺寸画出每个完整单位和剩余分数，不合并整数单位、不把整数部分丢掉；超过此范围、负数或整数单位无法确认时改用完整旧 SVG/原图回退。model:"fraction" 的上下分数文字继续保留 whole，不受图示数量上限限制。
+- number_line：{type,min,max,step,points:[{value,label?,color?}],label?}。所有 points 必须落在 min~max 内，刻度总数不要超过 25，避免刻度文字重叠；范围或点位不确定时留空 figure_spec。
+- coordinate_plane：{type,xMin,xMax,yMin,yMax,xStep?,yStep?,points:[{id,x,y,label?,color?}],segments:[{from,to,label?,dashed?}],labels:[{text,x,y}],title?}。坐标轴范围必须递增，点和文字标注必须落在范围内，坐标轴刻度每个方向不超过 25 个；程序使用统一的横纵单位比例，不得依靠拉伸坐标表达几何关系；若等单位比例会让刻度间距过密，留空 figure_spec；点、线段和标注关系不确定时留空 figure_spec。
+- circle_geometry：{type,center:{id,x,y,label?},radius,points:[{id,x,y,label?}],radii:[{to,label?,dashed?}],chords:[{from,to,label?,dashed?}],diameters:[{from,to,label?,dashed?}],sectors:[{from,to,arcType?,through?,fill?,label?}],arcs:[{from,to,arcType?,through?,label?,dashed?}],labels:[{text,x,y}],title?}。center 和 points 使用 0~100 的相对坐标，points 必须位于圆周，半径不能越出画布；diameters 的两个端点必须在圆周且连线经过圆心。普通弧省略 arcType 时绘制劣弧，明确写“优弧”或需要超过半圆时使用 arcType:"major"；arcType:"minor" 表示劣弧。若端点为直径两端或接近直径两端，必须用 through 指定半圆经过的第三个圆周点，并省略 arcType（半圆既不是优弧也不是劣弧）；through 不能等于起点或终点。through 与 arcType 不一致、弧型/方向/点位无法确认时留空 figure_spec 并使用旧 SVG/原图回退。
+- area_geometry：{type,shape:"triangle"|"rectangle"|"square"|"parallelogram"|"trapezoid",width,height,topWidth?,offset?,apexRatio?,baseLabel?,heightLabel?,topLabel?,title?,fill?}。width 和 height 是相对尺寸，程序自动绘制稳定的面积图和虚线高；triangle 可用 apexRatio 表示高落在底边的位置，parallelogram 可用 offset 表示上底相对下底的水平错位，trapezoid 必须给出小于 width 的 topWidth；不要输出自由坐标，不确定形状或尺寸关系时留空 figure_spec。
+- solid_geometry：{type,shape:"cube"|"cuboid",width,depth,height,widthLabel?,depthLabel?,heightLabel?,title?,fill?}。程序按固定等距投影绘制正方体或长方体的三个可见面、隐藏棱虚线和长宽高标注；cube 的 width、depth、height 必须相等；不要输出自由坐标，复杂展开图或不可确认的隐藏棱关系留空 figure_spec。
+- basic_geometry：{type,points:[{id,x,y,label?}],segments:[{from,to,label?,dashed?}],polygons:[{points,fill?}],circles:[{center,radius,label?}],angles:[{vertex,from,to,style:"arc"|"right",radius?,label?}],labels:[{text,x,y}]}。x/y 为 0~100 的相对坐标，所有 id 必须唯一，所有线段、多边形、圆和角必须引用 points 中存在的 id；angle 的 vertex 是角顶点，from/to 是两条边上的点，style 为 arc 时绘制圆弧，style 为 right 时绘制直角小方框；圆和角标记不能越出画布；关系不确定时留空 figure_spec。
+- 明确的长度标注必须与固定结构关系一致：正方形各边、正方体各棱相等，矩形和平行四边形的上下边相等，同圆半径相等、直径为半径两倍；直角小方框若配明确度数则必须为90度。仅在内部核对时换算单位，输出标签仍保留题目原文，不得把1分米改写成10厘米。width/height/depth/radius 等相对绘图尺寸不是物理长度，不能据此求解未知数、填作答空格或改写标注；裸数字角标可能是编号，不得擅自当作度数。结构与明确标注相互矛盾时留空 figure_spec 并回退，不猜测应修改哪一处。
+- 同圆有可比较的明确长度时，弦长不能超过直径或半径的两倍；同一对端点无论顺序如何，作为弦或直径时的明确长度必须一致。无单位值只和其它无单位值比较，不从其它标注补单位；未知值不能遮住已知长度间的矛盾。不得根据相对绘图半径、弦的角度或坐标比例推算实际长度，无法确认的表达式保留原文，不强行求值。
+- 同圆 points 中的不同 id 必须表示不同的圆周点。小幅径向坐标误差会沿原方向对齐圆周，对齐后仍不能重合或形成零长度弦，直径两端在对齐后仍须经过圆心；不能为通过校验而合并点名、删除线段或移动端点。无法确认原图中的点位关系时留空 figure_spec，使用完整旧 SVG/原图回退。
+- bar_chart/line_chart：categories 与 values 数量必须一致，数据必须逐项对应；可选 maxValue、minValue、unit、title。
+- grid_shape：rows、cols、filledCells、cellLabels、title?；行列从 0 开始，所有格子必须在网格内，同一格不能重复填色或重复标注。cellLabels 必须完整保留原有文字及所属行列，不能为了排版缩写、删字、拆到其它格子或改变行列数；程序会保持正方格、按需扩大画布，并将格内文字排成最多三行，装不下时回退。不确定的格子不要猜，无法确认整体结构时留空 figure_spec。
+- table：headers 和 rows，保留表格中可见的标题、单位和空单元格；列数、标题或单元格对应关系不确定时留空 figure_spec。
+- figure_group：{type:"figure_group",title?,compareSizes?:boolean,figures:[{label,figure}]}。compareSizes 是可选布尔值，默认 false；用于同一道题的 2~6 张独立子图或选项图；label 完整保留原图的 A/B/C/D、甲乙或图号，不能为空或重复；figures 必须按原题顺序完整列出，每个 figure 使用上面一种单图结构，不能嵌套 figure_group，不能跨子图引用点。各子图的 id 只在本图内生效，允许不同选项重复使用同一顶点字母。
+- 图组由程序使用统一的像素缩放排版，不会分别放大到相同宽度。题目若依赖不同子图的实际大小比较，必须设置 compareSizes:true，并仅使用 basic_geometry 或 circle_geometry，在所有子图中使用相同的 0~100 坐标单位及明确的相对尺寸；basic_geometry 的圆半径不得小于 1。area_geometry、solid_geometry、坐标图等模板会各自适配画布，不能用它们表达跨子图大小关系。无法确认比例、任一选项的结构或完整文字时，整组 figure_spec 留空，并用完整旧 SVG/原图回退；不能只输出部分选项。
+- JSON 必须是合法 JSON，字符串中的双引号和换行必须正确转义。`;
+
 /**
  * 过滤图片中人的思考过程与草稿演算的规则（图片解析、重新解题共用）
  */
@@ -218,10 +248,19 @@ export const DRAFT_FILTER_RULES = `【过滤草稿与思考过程规则】
 - question_text 只转录原题本身，必须过滤掉图片中人的思考过程、手写草稿、竖式演算、试算过程、审题圈画、旁批注释以及填空处的手写答案。处理填空时先辨认原图中印刷的空格结构，再只移除覆盖在空格里的手写答案；不得把括号、方括号、分数线、单位、横线、上下排列等印刷内容误判为手写并删除。普通横线空还原为空线；分数或其他上下结构空必须保留原图所有印刷符号。例如原图分数线上下分别印有括号、括号内有手写数字，清除数字后必须写作 $\\frac{(\\square)}{(\\square)}$；原图没有括号时才写作 $\\frac{\\square}{\\square}$。不能把上下结构压成单个 ____，也不要写成 $\\frac{____}{____}$。输出前逐项对照原图复核每个空格的括号、分隔线、单位和相对位置，只允许清除手写作答，不得规范化或简化原有版式。
 - wrong_answer_text 和 mistake_analysis 只记录和分析学生针对本题写出的正式错误答案或正式解题步骤，必须过滤掉空白处或题干旁的零散草稿、竖式演算、试算涂改和人的思考批注；若图片中仅有草稿或思考痕迹而无正式错误作答，wrong_answer_text 和 mistake_analysis 必须留空。`;
 
+/** 多小题答案必须保留题号和明确分隔，避免英文填空答案粘连。 */
+export const ANSWER_FORMAT_RULES = `【答案排版与小题分隔规则】
+- answer_text 必须按原题的小题顺序给出每一个最终答案，不能遗漏、合并或把多个答案写成一段无法区分的连续文本。
+- 原题包含两个或以上编号小题、多个填空或多个句子时，必须保留对应题号/小题标记，并在每个小题答案之间使用明确分隔：优先使用英文半角分号（;），其次在同一行使用一个空格，只有答案确实需要分段时才换行。例如：39.moved;40.have; 或 39.moved 40.have。
+- 严禁输出类似“39.moved40.have”“（1）答案（2）答案”这种没有分隔的粘连格式。不要用逗号代替小题分隔。
+- 单个答案不要人为添加题号；数学公式、日期、小数和英文单词内部的点号不能被当作小题分隔。`;
+
 /**
  * LaTeX 书写规则：页面用 KaTeX 渲染，只支持其中的命令（识别、举一反三、重新解题、修复公式共用）
  */
 export const LATEX_RULES = String.raw`- 行内公式用 $...$，独立公式用 $$...$$；不要用 \(...\) 或 \[...\]，每个 $ 必须成对出现。
+- 独立公式必须使用块格式：开头 $$ 和结尾 $$ 各自独占一行，公式内容写在两行定界符之间；结尾 $$ 后不要直接粘接中文正文。
+- 中文句号、逗号、分号等标点不要写进 $$...$$；需要保留的标点放在公式外，公式中的中文说明必须写在 \text{...} 内。
 - 所有 LaTeX 命令（如 \frac、\sqrt、\times、\angle）都必须写在 $...$ 内，公式外不能出现反斜杠命令。
 - 只使用 KaTeX 支持的命令和环境：方程组用 \begin{cases}...\end{cases}，多行推导用 \begin{aligned}...\end{aligned}（放在 $$...$$ 中），不要用 align、eqnarray、\newcommand、\usepackage、\label、\tag 等。
 - 大括号 {} 必须成对，\left 与 \right 必须成对，\begin{...} 与 \end{...} 必须对应。
@@ -415,11 +454,18 @@ function generateSimilarFigureInstruction(originalFigureSvg?: string | null): st
   const reference = originalFigureSvg
     ? `原题配图如下（SVG），新题若沿用类似图形，必须按新题的条件和数据重新绘制，不要直接照抄：\n${originalFigureSvg}`
     : '原题没有配图；只有新题确实需要图形才能理解时才画图。';
-  return `<figure_svg>
-如果新题目需要配图，在此处用 SVG 绘制新题目的配图，图中的字母、数字和标注必须与新题目一致：
+  return `<figure_spec>
+如果新题目需要配图且属于支持的模板，在此处只输出合法 JSON；图中的字母、数字和标注必须与新题目一致：
+${FIGURE_SPEC_RULES}
+${reference}
+新题目不需要配图或无法准确结构化时请留空。
+</figure_spec>
+
+<figure_svg>
+仅当 figure_spec 留空或无法表达特殊图形时，在此处用 SVG 绘制新题目的配图；图中的字母、数字和标注必须与新题目一致：
 ${FIGURE_SVG_RULES}
 ${reference}
-新题目不需要配图时请留空。
+新题目不需要配图或已提供有效 figure_spec 时请留空。
 </figure_svg>`;
 }
 
@@ -427,20 +473,32 @@ ${reference}
  * 单独为已有题目重绘配图的提示词（详情页「AI 重新生成配图」）
  */
 export const DEFAULT_FIGURE_TEMPLATE = `【角色与核心任务 (ROLE AND CORE TASK)】
-你是一位擅长绘制试题插图的老师。请观察用户提供的题目图片，判断题目是否带有配图；如果有，用 SVG 精确地重新绘制该配图。
+你是一位擅长绘制试题插图的老师。请观察用户提供的一张或多张题目图片，判断题目是否带有配图；优先识别为结构化图形数据，由程序按模板绘制；特殊图形才用 SVG 绘制。
 
-【题目文字（供参考，用于核对图中标注）】
+【目标题目文字（配图必须服务于此题；图片可能是相似原题）】
 {{question_text}}
 
+【图片与题干不一致时的处理规则】
+- 图片是图形结构、布局和画法的参考；上方题目文字是本次要绘制的新题，标注、数字、字母和数量关系必须以它为准。
+- 不要把参考图片中的旧数字、旧字母或旧结论照搬到新图；按目标题干重新核对并绘制对应内容。
+- 如果提供了多张图片，综合查看所有图片，避免遗漏跨页或分散在不同图片中的图形信息。
+- 目标题干明确要求观察竖式、图形、统计图等视觉内容时，应生成对应配图；图片中有明确属于本题的配图且题干没有否定图形时，也应重绘配图，即使题干省略了“如图”等提示。
+- 只有目标题目确实不需要配图，或图片中的图形明确属于其它题目时，才返回 false。
+
 【输出格式】
-只输出以下两个标签，不要输出其他内容：
+只输出以下三个标签，不要输出其他内容。优先使用 figure_spec，只有特殊图形无法结构化时才使用 figure_svg：
 
 <has_figure>
 题目本身是否带有配图（几何图形、函数图像、示意图、统计图、实验装置图、电路图等；不含学生的作答痕迹和纯文字表格）。有配图填 true，否则填 false。
 </has_figure>
 
+<figure_spec>
+如果 has_figure 为 true 且图形属于支持的模板，只输出合法 JSON；如果无法准确结构化请留空。
+${FIGURE_SPEC_RULES}
+</figure_spec>
+
 <figure_svg>
-如果 has_figure 为 true，用 SVG 重新绘制题目配图：
+如果 figure_spec 留空或无法表达特殊图形，且 has_figure 为 true，用 SVG 重新绘制题目配图：
 ${FIGURE_SVG_RULES}
 如果 has_figure 为 false，请留空。
 </figure_svg>`;
@@ -606,7 +664,8 @@ ${englishTagsString}`;
     provider_hints: options?.providerHints || ''
   }).trim() + '\n\n' + [
     '请完整识别用户图片中的题目、独立求解，并仅根据可见的正式作答分析错因，过滤掉草稿与人的思考过程。',
-    generateOutputContract('analyze'), DRAFT_FILTER_RULES, langInstruction, LATEX_RULES,
+    '如果提供多张图片，它们按顺序属于同一道完整题目（可能是跨页文章、问题或补充图示）。必须联合阅读全部图片，按顺序逐字转录完整的材料和问题，只输出一个题目的结构化结果；不要将每张图片或每个裁剪区域当作独立题目，不得遗漏后续图片，也不得改写、换算单位或凭空补充原题。',
+    generateOutputContract('analyze'), DRAFT_FILTER_RULES, ANSWER_FORMAT_RULES, langInstruction, LATEX_RULES,
     generateGradeInstruction(gradeSemester), generateGradeRecognitionInstruction(gradeSemester),
     tagsSection, DIFFICULTY_STARS_RULES,
     '有配图时输出 figure_description，客观描述图形结构与可见标注；不得绘制、重建或输出 SVG。',
@@ -1069,7 +1128,7 @@ export function generateReanswerPrompt(
     provider_hints: options?.providerHints || ''
   }).trim() + '\n\n' + [
     '请以校正后的题目文本为准重新解答，图片仅用于补充图形及可见的正式作答，过滤掉草稿与人的思考过程。',
-    generateOutputContract('reanswer'), DRAFT_FILTER_RULES, langInstruction, LATEX_RULES,
+    generateOutputContract('reanswer'), DRAFT_FILTER_RULES, ANSWER_FORMAT_RULES, langInstruction, LATEX_RULES,
     generateGradeInstruction(gradeSemester), generateGradeRecognitionInstruction(gradeSemester),
     DIFFICULTY_STARS_RULES,
     options?.candidateTags ? `只能从候选知识点中选择，名称必须完全一致，最多 5 个；无可用标签时留空：${options.candidateTags.tags.join('、')}` : '',

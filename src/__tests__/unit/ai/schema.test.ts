@@ -4,7 +4,8 @@
  * 测试 Zod 验证 schema，特别是新增的错因分析字段
  */
 import { describe, it, expect } from 'vitest';
-import { ParsedQuestionSchema, safeParseParsedQuestion, parseMasteryEvaluation, extractJsonObject, normalizeSubject, parseTagSuggestion, parseDifficultyStars, stripThinkingTags } from '@/lib/ai/schema';
+import { circleOption, FIGURE_GROUP_FIXTURES } from '@/__tests__/fixtures/figure-group-fixtures';
+import { ParsedQuestionSchema, safeParseParsedQuestion, parseMasteryEvaluation, extractJsonObject, normalizeSubject, parseTagSuggestion, parseDifficultyStars, stripThinkingTags, parseFigure } from '@/lib/ai/schema';
 
 describe('ParsedQuestionSchema 验证', () => {
     const validBaseQuestion = {
@@ -203,5 +204,92 @@ describe('parseDifficultyStars', () => {
         expect(ParsedQuestionSchema.safeParse({ ...base, difficultyStars: 3 }).success).toBe(true);
         expect(ParsedQuestionSchema.safeParse({ ...base, difficultyStars: null }).success).toBe(true);
         expect(ParsedQuestionSchema.safeParse({ ...base, difficultyStars: 6 }).success).toBe(false);
+    });
+});
+
+describe('parseFigure', () => {
+    it('有效图组优先本地绘制，任一子图失败时整体使用旧 SVG', () => {
+        const spec = FIGURE_GROUP_FIXTURES[0].spec;
+        const legacy = '<svg><text>完整旧配图</text></svg>';
+        const valid = parseFigure('true', legacy, JSON.stringify(spec));
+        expect(valid.figureSvg).toContain('data-figure-option="D"');
+        expect(valid.figureSvg).not.toContain('完整旧配图');
+        const invalid = { type: 'figure_group', figures: [
+            { label: 'A', figure: circleOption(10) },
+            { label: 'B', figure: { type: 'fraction', numerator: '1', denominator: '0' } },
+        ] };
+        expect(parseFigure('true', legacy, JSON.stringify(invalid)).figureSvg).toContain('完整旧配图');
+        expect(parseFigure('true', legacy, JSON.stringify(invalid)).figureSvg).not.toContain('data-figure-panel');
+        expect(parseFigure('true', null, JSON.stringify(invalid))).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('优先使用结构化图形，并保留旧 SVG 作为回退', () => {
+        const structured = parseFigure(
+            'true',
+            '<svg><text>legacy</text></svg>',
+            JSON.stringify({ type: 'fraction', numerator: '3', denominator: '5', model: 'fraction' }),
+        );
+        expect(structured.hasFigure).toBe(true);
+        expect(structured.figureSvg).toContain('>3</text>');
+        expect(structured.figureSvg).not.toContain('legacy');
+
+        const legacy = parseFigure('true', '<svg><rect width="1" height="1"/></svg>', '{invalid');
+        expect(legacy.hasFigure).toBe(true);
+        expect(legacy.figureSvg).toContain('<rect');
+    });
+
+    it('圆弧的第三点与弧型冲突时仍可回退旧 SVG，没有旧图时返回空配图', () => {
+        const spec = JSON.stringify({
+            type: 'circle_geometry', center: { id: 'O', x: 50, y: 50 }, radius: 30,
+            points: [{ id: 'A', x: 80, y: 50 }, { id: 'B', x: 50, y: 20 }, { id: 'C', x: 20, y: 50 }],
+            arcs: [{ from: 'A', to: 'B', through: 'C', arcType: 'minor' }],
+        });
+        const legacy = parseFigure('true', '<svg><text>legacy arc</text></svg>', spec);
+        expect(legacy.hasFigure).toBe(true);
+        expect(legacy.figureSvg).toContain('legacy arc');
+        const absent = parseFigure('true', '', spec);
+        expect(absent.hasFigure).toBe(true);
+        expect(absent.figureSvg).toBeNull();
+    });
+
+    it('方格文字装不下时回退旧 SVG，未提供旧图时保留有配图标记', () => {
+        const spec = JSON.stringify({
+            type: 'grid_shape', rows: 30, cols: 30,
+            cellLabels: [{ row: 0, col: 0, text: '第一季度数学成绩' }],
+        });
+        const legacy = parseFigure('true', '<svg><text>原有方格配图</text></svg>', spec);
+        expect(legacy.hasFigure).toBe(true);
+        expect(legacy.figureSvg).toContain('原有方格配图');
+        const absent = parseFigure('true', '', spec);
+        expect(absent.hasFigure).toBe(true);
+        expect(absent.figureSvg).toBeNull();
+    });
+
+    it('点名避让无可用位置时沿用旧 SVG 或空配图流程', () => {
+        const spec = JSON.stringify({
+            type: 'basic_geometry', points: [{ id: 'A', x: 50, y: 50, label: 'A' }],
+            labels: Array.from({ length: 9 }, (_, index) => ({ text: '预留标注预留标注预留标注', x: 50, y: 20 + index * 7.5 })),
+        });
+        expect(parseFigure('true', '<svg><text>原有配图</text></svg>', spec).figureSvg).toContain('原有配图');
+        expect(parseFigure('true', '', spec)).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('长度标注无法放下时保留旧 SVG 或空配图，不删除数值强行出图', () => {
+        const spec = JSON.stringify({
+            type: 'basic_geometry', points: [{ id: 'A', x: 50, y: 50 }, { id: 'B', x: 51, y: 50 }],
+            segments: [{ from: 'A', to: 'B', label: '12cm' }],
+        });
+        expect(parseFigure('true', '<svg><text>原有长度配图</text></svg>', spec).figureSvg).toContain('原有长度配图');
+        expect(parseFigure('true', '', spec)).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('扇形过窄无法放下完整文字时沿用旧 SVG 或空配图', () => {
+        const spec = JSON.stringify({
+            type: 'circle_geometry', center: { id: 'O', x: 50, y: 50 }, radius: 30,
+            points: [{ id: 'A', x: 80, y: 50 }, { id: 'B', x: 79.886, y: 52.615 }],
+            sectors: [{ from: 'A', to: 'B', label: '5°' }],
+        });
+        expect(parseFigure('true', '<svg><text>原有扇形配图</text></svg>', spec).figureSvg).toContain('原有扇形配图');
+        expect(parseFigure('true', '', spec)).toEqual({ hasFigure: true, figureSvg: null });
     });
 });

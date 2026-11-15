@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import type { AIImageInput } from './image-input';
 import type { ChatCompletion, ChatCompletionChunk, ChatCompletionCreateParamsNonStreaming, ChatCompletionCreateParamsStreaming } from "openai/resources/chat/completions";
 import type { AIService, GradeLevel, ParsedQuestion, DifficultyLevel, AIConfig, ReanswerQuestionResult, GeogebraAnalysisResult, MasteryEvaluationInput, MasteryEvaluationResult, AnswerGradingInput, AnswerGradingResult, TagSuggestionInput, TagSuggestionResult, CandidateTags, FigureResult } from "./types";
 import { generateGradeRecognitionRequest, generateAnalyzeRequest, generateSimilarQuestionRequest, generateGeogebraRequest, generateMasteryRequest, generateGradingRequest, generateTagSuggestRequest, generateFigureRequest, generateSvgAnimationRequest, generateSvgNarrationRequest, generateLatexFixRequest } from './prompt-requests';
@@ -7,7 +8,7 @@ import type { NarrationSegment } from '../svg-animation';
 import { parseLatexFix } from './latex-fix';
 import type { LatexFixInput, LatexFixResult } from './latex-fix';
 import { getAppConfig } from '../config';
-import { parseGradeRecognition, safeParseParsedQuestion, parseMasteryEvaluation, parseAnswerGrading, normalizeSubject, parseTagSuggestion, parseDifficultyStars, parseFigure, stripThinkingTags } from './schema';
+import { parseGradeRecognition, safeParseParsedQuestion, parseMasteryEvaluation, parseAnswerGrading, normalizeSubject, parseTagSuggestion, parseDifficultyStars, parseFigure, stripThinkingTags, normalizeAnswerText } from './schema';
 import { prefetchSubjectTags } from './tag-service';
 import { createLogger } from '../logger';
 import { AI_OUTPUT_TRUNCATED, withTruncationRetry } from './truncation';
@@ -16,6 +17,8 @@ import { parseRecognizedGrade } from '../question-grade';
 import { normalizeGeneratedQuestion } from './generated-question';
 import { normalizeAiQuestionTags } from './knowledge-points';
 import type { RequestProgress } from '../request-progress';
+import { DEFAULT_AI_TIMEOUT_MS } from '../ai-timeout';
+import { getAIRequestSignal } from './request-deadline';
 
 const logger = createLogger('ai:openai');
 
@@ -61,7 +64,7 @@ export class OpenAIProvider implements AIService {
             reasoning_effort: GLOBAL_REASONING_EFFORT,
             stream: true,
             stream_options: { include_usage: true },
-        } as ChatCompletionCreateParamsStreaming);
+        } as ChatCompletionCreateParamsStreaming, { signal: getAIRequestSignal() });
 
         if (!isAsyncIterable<ChatCompletionChunk>(responseOrStream)) {
             const response = responseOrStream as ChatCompletion;
@@ -90,6 +93,7 @@ export class OpenAIProvider implements AIService {
             if (chunk.usage) usage = chunk.usage;
         }
 
+        if (!finishReason) throw new Error('AI_RESPONSE_ERROR: Stream ended before completion');
         this.onProgress?.({ stage: 'collecting', percent: 82 });
         const response: ChatCompletion = {
             id: `stream-${Date.now().toString(36)}`,
@@ -142,6 +146,8 @@ export class OpenAIProvider implements AIService {
         this.openai = new OpenAI({
             apiKey: apiKey,
             baseURL: baseURL || undefined,
+            timeout: DEFAULT_AI_TIMEOUT_MS,
+            maxRetries: 0,
             defaultHeaders: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             },
@@ -214,7 +220,7 @@ export class OpenAIProvider implements AIService {
         logger.debug({ textLength: text.length }, 'Parsing AI response');
 
         const questionText = this.extractTag(text, "question_text");
-        const answerText = this.extractTag(text, "answer_text");
+        const answerText = normalizeAnswerText(this.extractTag(text, "answer_text") || '', questionText);
         const analysis = this.extractTag(text, "analysis");
         const subjectRaw = this.extractTag(text, "subject");
         const knowledgePointsRaw = this.extractTag(text, "knowledge_points");
@@ -263,7 +269,7 @@ export class OpenAIProvider implements AIService {
             gradeSemester: parseRecognizedGrade(this.extractTag(text, "grade_semester")),
             difficultyStars: parseDifficultyStars(this.extractTag(text, "difficulty_stars")),
             ...(includeFigureSvg
-                ? parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"))
+                ? parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"), this.extractTag(text, "figure_spec"), questionText)
                 : parseFigure(this.extractTag(text, "has_figure"), null)),
         };
 
@@ -280,8 +286,10 @@ export class OpenAIProvider implements AIService {
         }
     }
 
-    async analyzeImage(imageBase64: string, mimeType: string = "image/jpeg", language: 'zh' | 'en' = 'zh', grade?: GradeLevel | null, subject?: string | null, gradeSemester?: string | null, candidateTags?: CandidateTags): Promise<ParsedQuestion> {
+    async analyzeImage(imageBase64: string, mimeType: string = "image/jpeg", language: 'zh' | 'en' = 'zh', grade?: GradeLevel | null, subject?: string | null, gradeSemester?: string | null, candidateTags?: CandidateTags, additionalImages: AIImageInput[] = []): Promise<ParsedQuestion> {
         const config = getAppConfig();
+        const images = [{ base64: imageBase64, mimeType }, ...additionalImages];
+        const imageParts = images.map(image => ({ type: 'image_url' as const, image_url: { url: `data:${image.mimeType};base64,${image.base64}` } }));
 
         // 有错题本学段 + 学科时直接使用其全部知识点，否则按学科、年级取标签
         const tagOptions = candidateTags ? { candidateTags } : await prefetchSubjectTags(subject, grade);
@@ -315,12 +323,7 @@ export class OpenAIProvider implements AIService {
                         role: "user",
                         content: [
                             { type: "text", text: systemPrompt.user },
-                            {
-                                type: "image_url",
-                                image_url: {
-                                    url: `data:${mimeType};base64,[...${imageBase64.length} bytes base64 data...]`,
-                                },
-                            },
+                            ...images.map(image => ({ type: 'image_url', image_url: { url: `data:${image.mimeType};base64,[...${image.base64.length} bytes base64 data...]` } })),
                         ],
                     },
                 ],
@@ -340,17 +343,13 @@ export class OpenAIProvider implements AIService {
                         role: "user",
                         content: [
                             { type: "text", text: systemPrompt.user },
-                            {
-                                type: "image_url",
-                                image_url: {
-                                    url: `data:${mimeType};base64,${imageBase64}`,
-                                },
-                            },
+                            ...imageParts,
                         ],
                     },
                 ]);
 
                 const res = await fetch(`${this.baseURL}/chat/completions`, {
+                    signal: getAIRequestSignal() ?? AbortSignal.timeout(DEFAULT_AI_TIMEOUT_MS),
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${this.apiKey}`,
@@ -383,12 +382,7 @@ export class OpenAIProvider implements AIService {
                             role: "user",
                             content: [
                             { type: "text", text: systemPrompt.user },
-                                {
-                                    type: "image_url",
-                                    image_url: {
-                                        url: `data:${mimeType};base64,${imageBase64}`,
-                                    },
-                                },
+                                ...imageParts,
                             ],
                         },
                     ],
@@ -497,7 +491,7 @@ export class OpenAIProvider implements AIService {
         }
     }
 
-    async reanswerQuestion(questionText: string, language: 'zh' | 'en' = 'zh', subject?: string | null, imageBase64?: string, gradeSemester?: string | null, candidateTags?: CandidateTags): Promise<ReanswerQuestionResult> {
+    async reanswerQuestion(questionText: string, language: 'zh' | 'en' = 'zh', subject?: string | null, imageBase64?: string, gradeSemester?: string | null, candidateTags?: CandidateTags, additionalImages: AIImageInput[] = []): Promise<ReanswerQuestionResult> {
         const { generateReanswerRequest } = await import('./prompt-requests');
         const prompt = generateReanswerRequest(language, questionText, subject, { candidateTags }, gradeSemester);
 
@@ -520,7 +514,8 @@ export class OpenAIProvider implements AIService {
                 logger.debug({ imageLength: imageUrl.length }, 'Image added to request');
                 userContent = [
                     { type: "text", text: prompt.user },
-                    { type: "image_url", image_url: { url: imageUrl } }
+                    { type: "image_url", image_url: { url: imageUrl } },
+                    ...additionalImages.map(image => ({ type: 'image_url' as const, image_url: { url: `data:${image.mimeType};base64,${image.base64}` } })),
                 ];
             } else {
                 logger.debug({ imageBase64Type: typeof imageBase64, hasValue: !!imageBase64 }, 'No image data');
@@ -561,7 +556,7 @@ export class OpenAIProvider implements AIService {
             if (!text) throw new Error("Empty response from AI");
 
             // 解析响应
-            const answerText = this.extractTag(text, "answer_text") || "";
+            const answerText = normalizeAnswerText(this.extractTag(text, "answer_text") || "", questionText);
             const analysis = this.extractTag(text, "analysis") || "";
             const knowledgePointsRaw = this.extractTag(text, "knowledge_points") || "";
             const knowledgePoints = knowledgePointsRaw.split(/[,，\n]/).map(k => k.trim()).filter(k => k.length > 0);
@@ -745,7 +740,7 @@ export class OpenAIProvider implements AIService {
         }
     }
 
-    async generateFigureSvg(imageBase64: string, mimeType: string, questionText?: string | null): Promise<FigureResult> {
+    async generateFigureSvg(imageBase64: string, mimeType: string, questionText?: string | null, additionalImages: AIImageInput[] = []): Promise<FigureResult> {
         const prompt = generateFigureRequest(questionText);
         logger.info({ provider: 'OpenAI', model: this.model, imageSize: imageBase64.length }, 'Figure SVG Request');
 
@@ -754,7 +749,11 @@ export class OpenAIProvider implements AIService {
                 model: this.model,
                 messages: [
                     { role: "system", content: prompt.system },
-                    { role: "user", content: [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }, { type: "text", text: prompt.user }] },
+                    { role: "user", content: [
+                        { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+                        ...additionalImages.map((image) => ({ type: "image_url" as const, image_url: { url: `data:${image.mimeType};base64,${image.base64}` } })),
+                        { type: "text", text: prompt.user },
+                    ] },
                 ],
                 max_tokens: maxTokens,
             }), 8192, () => logger.warn('Output truncated by reasoning, retrying with larger max_tokens'), this.model);
@@ -763,7 +762,7 @@ export class OpenAIProvider implements AIService {
             logger.debug({ rawResponse: text }, 'Figure SVG AI raw response');
 
             if (!text) throw new Error("Empty response from AI");
-            return parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"));
+            return parseFigure(this.extractTag(text, "has_figure"), this.extractTag(text, "figure_svg"), this.extractTag(text, "figure_spec"), questionText);
         } catch (error) {
             logger.error({ error, stack: error instanceof Error ? error.stack : undefined }, 'Error during figure SVG generation');
             this.handleError(error);

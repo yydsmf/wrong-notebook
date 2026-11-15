@@ -6,6 +6,8 @@ import { AnthropicProvider } from "./anthropic-provider";
 import { MiniMaxCodeProvider } from "./minimax-code-provider";
 import { isVendorProvider, resolveVendorConfig, VENDOR_PRESETS } from "./vendor-presets";
 import { limitModelConcurrency } from "./concurrency";
+import { getAIRequestSignal, withAIRequestDeadline } from './request-deadline';
+import { resolveAiTimeout } from '../ai-timeout';
 
 export * from "./types";
 
@@ -23,7 +25,17 @@ function concurrencyKey(provider: string, baseUrl: string | undefined, model: st
 /** 当前配置的 AI 服务，所有调用受同一模型的并发上限约束 */
 export function getAIService(options?: { onProgress?: (progress: RequestProgress) => void }): AIService {
     const { service, key } = createAIService(options);
-    return limitModelConcurrency(service, key);
+    const limited = limitModelConcurrency(service, key);
+    return new Proxy(limited, {
+        get(target, property, receiver) {
+            const value = Reflect.get(target, property, receiver);
+            if (typeof value !== 'function' || property === 'constructor') return value;
+            return (...args: unknown[]) => withAIRequestDeadline(async () => {
+                getAIRequestSignal()?.throwIfAborted();
+                return value.apply(target, args);
+            }, resolveAiTimeout(getAppConfig().timeouts?.analyze));
+        },
+    });
 }
 
 function createAIService(options?: { onProgress?: (progress: RequestProgress) => void }): { service: AIService; key: string } {

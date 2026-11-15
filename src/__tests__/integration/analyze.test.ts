@@ -141,6 +141,37 @@ describe('/api/analyze', () => {
             expect(callArgs[1]).toBe('image/jpeg');
         });
 
+        it('单题多图按顺序在一次调用中传递，保留每张图片的格式', async () => {
+            mocks.mockAIService.analyzeImage.mockResolvedValue({ questionText: '跨页题', answerText: '答案', analysis: '解析', knowledgePoints: [] });
+            const response = await POST(new Request('http://localhost/api/analyze', {
+                method: 'POST', body: JSON.stringify({ images: ['data:image/png;base64,QQ==', 'data:image/jpeg;base64,Qg=='], language: 'zh' }),
+            }));
+            expect(response.status).toBe(200);
+            expect(mocks.mockAIService.analyzeImage).toHaveBeenCalledTimes(1);
+            expect(mocks.mockAIService.analyzeImage.mock.calls[0][0]).toBe('QQ==');
+            expect(mocks.mockAIService.analyzeImage.mock.calls[0][1]).toBe('image/png');
+            expect(mocks.mockAIService.analyzeImage.mock.calls[0][7]).toEqual([{ base64: 'Qg==', mimeType: 'image/jpeg' }]);
+        });
+
+        it('超过 10 MiB 的单题多图仍完整传给 AI，不截断或丢弃第二张', async () => {
+            const base64 = 'A'.repeat(6 * 1024 * 1024);
+            mocks.mockAIService.analyzeImage.mockResolvedValue({ questionText: '跨页题', answerText: '答案', analysis: '解析', knowledgePoints: [] });
+            const response = await POST(new Request('http://localhost/api/analyze', {
+                method: 'POST', body: JSON.stringify({ images: [`data:image/png;base64,${base64}`, `data:image/jpeg;base64,${base64}`] }),
+            }));
+            expect(response.status).toBe(200);
+            expect(mocks.mockAIService.analyzeImage).toHaveBeenCalledTimes(1);
+            const args = mocks.mockAIService.analyzeImage.mock.calls[0];
+            expect(args[0].length).toBe(base64.length);
+            expect(args[7]).toEqual([{ base64, mimeType: 'image/jpeg' }]);
+        });
+
+        it.each([[], [42], ['data:text/html;base64,QQ=='], Array(21).fill('QQ==')])('拒绝无效多图数据 %j', async images => {
+            const response = await POST(new Request('http://localhost/api/analyze', { method: 'POST', body: JSON.stringify({ images }) }));
+            expect(response.status).toBe(400);
+            expect(mocks.mockAIService.analyzeImage).not.toHaveBeenCalled();
+        });
+
         it('应该拒绝缺少图像数据的请求', async () => {
             const request = new Request('http://localhost/api/analyze', {
                 method: 'POST',

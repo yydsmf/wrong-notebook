@@ -7,6 +7,11 @@ import nextConfig, { securityHeaders } from '../../../next.config';
 const header = (key: string) => securityHeaders.find((h) => h.key === key)?.value;
 
 describe('安全响应头', () => {
+    it('代理请求容量覆盖多图上限及旧客户端重复首图，避免 10 MiB 截断', () => {
+        const limit = nextConfig.experimental?.proxyClientMaxBodySize;
+        expect(typeof limit).toBe('number');
+        expect(limit).toBeGreaterThan(70 * 1024 * 1024);
+    });
     it('对所有路径生效', async () => {
         const rules = await nextConfig.headers!();
         expect(rules).toEqual([{ source: '/:path*', headers: securityHeaders }]);

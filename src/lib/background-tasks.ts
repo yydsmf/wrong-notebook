@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createLogger } from "@/lib/logger";
+import { DEFAULT_AI_TIMEOUT_MS } from './ai-timeout';
 
 const logger = createLogger('background-tasks');
 
@@ -41,6 +42,7 @@ export interface BackgroundTask {
     progress: { done: number; total: number; failed: number } | null;
     error: string | null;
     canRetry: boolean;
+    canResume?: boolean;
     /** 可跳转查看的页面 */
     link: string | null;
     startedAt: string;
@@ -50,6 +52,11 @@ export interface BackgroundTask {
 interface StoredTask extends BackgroundTask {
     userId: string;
     retryRequest?: BackgroundTaskRetryRequest;
+    requestId?: string;
+    completeOnImport?: boolean;
+    expiresAt?: number;
+    attempt?: number;
+    importResult?: unknown;
 }
 
 export interface BackgroundTaskRetryRequest {
@@ -65,6 +72,8 @@ export interface BackgroundTaskInput {
     link?: string | null;
     total?: number;
     retryRequest?: BackgroundTaskRetryRequest;
+    requestId?: string;
+    completeOnImport?: boolean;
 }
 
 export interface BackgroundTaskHandle {
@@ -108,7 +117,7 @@ export function trackBackgroundTaskForRequest<T>(
 }
 
 /** 已结束的事务保留时长 */
-export const FINISHED_TASK_TTL_MS = 30 * 60 * 1000;
+export const FINISHED_TASK_TTL_MS = 3 * 60 * 60 * 1000;
 /** 每个用户最多保留的已结束事务数 */
 const MAX_FINISHED_PER_USER = 30;
 
@@ -183,7 +192,7 @@ function saveNow() {
         // 先写临时文件再改名，避免写到一半时进程退出留下损坏的文件
         const temp = `${file}.${process.pid}.tmp`;
         // Retry inputs can contain the original image or long prompts; keep them in memory only.
-        fs.writeFileSync(temp, JSON.stringify([...tasks.values()].map(({ retryRequest: _retryRequest, ...saved }) => saved)));
+        fs.writeFileSync(temp, JSON.stringify([...tasks.values()].map(({ retryRequest: _retryRequest, importResult: _importResult, ...saved }) => saved)));
         fs.renameSync(temp, file);
     } catch (error) {
         logger.warn({ error }, 'Failed to save background tasks');
@@ -201,6 +210,13 @@ function prune(now: number) {
     ensureLoaded();
     let removed = false;
     for (const [id, task] of tasks) {
+        if (task.status === 'running' && task.expiresAt && now >= task.expiresAt) {
+            task.status = 'failed';
+            task.error = task.canResume ? 'IMPORT_NOT_SAVED' : 'AI_TIMEOUT_ERROR';
+            task.canResume = false;
+            task.finishedAt = new Date(now).toISOString();
+            removed = true;
+        }
         if (task.finishedAt && now - Date.parse(task.finishedAt) > FINISHED_TASK_TTL_MS) {
             tasks.delete(id);
             removed = true;
@@ -231,21 +247,28 @@ export function startBackgroundTask(input: BackgroundTaskInput): BackgroundTaskH
         canRetry: !!input.retryRequest,
         link: input.link ?? null,
         retryRequest: input.retryRequest,
+        requestId: input.requestId,
+        completeOnImport: input.completeOnImport,
+        expiresAt: input.completeOnImport ? now + DEFAULT_AI_TIMEOUT_MS : undefined,
+        attempt: 0,
         startedAt: new Date(now).toISOString(),
         finishedAt: null,
     };
     tasks.set(id, task);
     scheduleSave();
 
+    const attempt = task.attempt;
     const finish = (status: BackgroundTaskStatus, error: string | null) => {
-        if (task.status !== 'running') return;
+        if (task.status !== 'running' || task.attempt !== attempt) return;
         task.status = status;
         task.error = error;
         task.finishedAt = new Date().toISOString();
         if (status !== 'failed') {
             task.canRetry = false;
             delete task.retryRequest;
+            delete task.importResult;
         }
+        task.canResume = false;
         scheduleSave();
     };
     return {
@@ -267,9 +290,19 @@ export function startBackgroundTask(input: BackgroundTaskInput): BackgroundTaskH
  */
 export async function trackBackgroundTask<T>(input: BackgroundTaskInput, operation: (task: BackgroundTaskHandle) => Promise<T>): Promise<T> {
     const task = startBackgroundTask(input);
+    const attempt = tasks.get(task.id)?.attempt;
     try {
         const result = await operation(task);
-        task.succeed();
+        const stored = tasks.get(task.id);
+        if (stored?.attempt !== attempt) throw new Error('AI_TIMEOUT_ERROR');
+        if (stored?.completeOnImport) {
+            if (stored.status === 'failed') throw new Error(stored.error || 'IMPORT_NOT_SAVED');
+        } else if (result instanceof Response && !result.ok) {
+            const body = await result.clone().json().catch(() => null);
+            task.fail(body?.message || 'AI_RESPONSE_ERROR');
+        } else {
+            task.succeed();
+        }
         return result;
     } catch (error) {
         task.fail(error);
@@ -296,6 +329,7 @@ export function listBackgroundTasks(userId: string): BackgroundTask[] {
         progress: task.progress && { ...task.progress },
         error: task.error,
         canRetry: task.status === 'failed' && !!task.retryRequest,
+        ...(task.canResume && task.importResult ? { canResume: true } : {}),
         link: task.link,
         startedAt: task.startedAt,
         finishedAt: task.finishedAt,
@@ -311,13 +345,19 @@ export function getBackgroundTaskRetry(userId: string, taskId: string): Backgrou
 }
 
 /** Atomically claim a failed task so two tabs cannot launch the same retry at once. */
-export function beginBackgroundTaskRetry(userId: string, taskId: string): BackgroundTaskRetryRequest | null {
+export function beginBackgroundTaskRetry(userId: string, taskId: string, requestId?: string): BackgroundTaskRetryRequest | null {
     const retryRequest = getBackgroundTaskRetry(userId, taskId);
     if (!retryRequest) return null;
     const task = tasks.get(taskId)!;
     task.status = 'running';
     task.error = null;
     task.finishedAt = null;
+    task.startedAt = new Date().toISOString();
+    task.attempt = (task.attempt ?? 0) + 1;
+    task.requestId = requestId;
+    task.canResume = false;
+    delete task.importResult;
+    if (task.completeOnImport) task.expiresAt = Date.now() + DEFAULT_AI_TIMEOUT_MS;
     if (task.progress) task.progress = { ...task.progress, done: 0, failed: 0 };
     scheduleSave();
     return retryRequest;
@@ -343,6 +383,59 @@ export function completeBackgroundTaskRetry(userId: string, taskId: string): boo
     tasks.delete(taskId);
     scheduleSave();
     return true;
+}
+
+/** 识别完成并不等于导入完成，保留结果供用户从后台继续校对。 */
+export function awaitBackgroundTaskImport(userId: string, taskId: string, result: unknown, review: boolean): void {
+    const task = tasks.get(taskId);
+    if (!task || task.userId !== userId || task.status !== 'running' || !task.completeOnImport) return;
+    task.importResult = result;
+    task.canResume = review;
+    task.expiresAt = Date.now() + (review ? FINISHED_TASK_TTL_MS : DEFAULT_AI_TIMEOUT_MS);
+    scheduleSave();
+}
+
+/** 只由原保存接口确认入库；失败时保留原请求，成功时移除图片重试载荷。 */
+export function finishBackgroundTaskImport(userId: string, taskId: string, error?: string, itemId?: string): boolean {
+    ensureLoaded();
+    const task = tasks.get(taskId);
+    // A late provider callback must not turn a timed-out or already-failed
+    // attempt back into success. Retries claim the task by setting it running.
+    if (!task || task.userId !== userId || !task.completeOnImport || task.status !== 'running') return false;
+    task.status = error ? 'failed' : 'succeeded';
+    task.error = error || null;
+    task.canResume = false;
+    task.finishedAt = new Date().toISOString();
+    if (!error) {
+        if (itemId) task.link = `/error-items/${encodeURIComponent(itemId)}`;
+        task.canRetry = false;
+        delete task.retryRequest;
+        delete task.importResult;
+    }
+    scheduleSave();
+    return true;
+}
+
+export function failBackgroundTaskImportRequest(userId: string, input: { taskId?: string; requestId?: string }, error: string): boolean {
+    ensureLoaded();
+    const task = [...tasks.values()].find(task => task.userId === userId && task.completeOnImport
+        && (input.taskId ? task.id === input.taskId : !!input.requestId && task.requestId === input.requestId));
+    return task ? finishBackgroundTaskImport(userId, task.id, error) : false;
+}
+
+export function getBackgroundTaskImportResult(userId: string, taskId: string) {
+    prune(Date.now());
+    const task = tasks.get(taskId);
+    if (!task || task.userId !== userId || task.status !== 'running' || !task.canResume || !task.importResult) return null;
+    const input = task.retryRequest?.body as { imageBase64?: string; images?: string[]; subjectId?: string; returnPath?: string } | undefined;
+    return {
+        parsedData: task.importResult,
+        imageBase64: input?.imageBase64 || input?.images?.[0] || '',
+        ...(input?.images ? { images: input.images } : {}),
+        subjectId: input?.subjectId || null,
+        confirmBeforeImport: true,
+        returnPath: input?.returnPath || '/',
+    };
 }
 
 /** Remove one finished task after its replay succeeds. */

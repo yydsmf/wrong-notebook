@@ -19,6 +19,7 @@ export const ERROR_ITEM_LIST_SELECT = {
 export const ERROR_ITEM_PRINT_SELECT = {
     ...ERROR_ITEM_LIST_SELECT,
     originalImageUrl: true,
+    originalImageUrls: true,
     answerText: true,
     analysis: true,
     figureSvg: true,

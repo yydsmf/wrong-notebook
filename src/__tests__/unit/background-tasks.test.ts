@@ -8,6 +8,7 @@ import {
     completeBackgroundTaskRetry,
     describeQuestion,
     FINISHED_TASK_TTL_MS,
+    finishBackgroundTaskImport,
     finishBackgroundTaskRetry,
     flushBackgroundTasksForTest,
     listBackgroundTasks,
@@ -41,6 +42,36 @@ describe('后台事务登记', () => {
     it('失败时记录错误码并继续抛出', async () => {
         await expect(trackBackgroundTask({ userId: 'u1', kind: 'reanswer' }, async () => { throw new Error('AI_RESPONSE_ERROR: 格式不对'); })).rejects.toThrow('AI_RESPONSE_ERROR');
         expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'failed', error: 'AI_RESPONSE_ERROR' });
+    });
+
+    it('错题导入只有保存成功后才标记完成，保存失败保留重试能力', () => {
+        const task = startBackgroundTask({
+            userId: 'u1',
+            kind: 'analyze',
+            completeOnImport: true,
+            retryRequest: { path: '/api/analyze', body: { autoSave: true } },
+        });
+
+        expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'running', canRetry: false });
+        expect(finishBackgroundTaskImport('u1', task.id, 'QUESTION_SAVE_FAILED')).toBe(true);
+        expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'failed', canRetry: true, error: 'QUESTION_SAVE_FAILED' });
+
+        expect(beginBackgroundTaskRetry('u1', task.id)).not.toBeNull();
+        expect(finishBackgroundTaskImport('u1', task.id, undefined, 'item-1')).toBe(true);
+        expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'succeeded', canRetry: false, link: '/error-items/item-1' });
+    });
+
+    it('超时或失败后的迟到保存回调不能把任务改成成功', () => {
+        const task = startBackgroundTask({
+            userId: 'u1',
+            kind: 'analyze',
+            completeOnImport: true,
+            retryRequest: { path: '/api/analyze', body: { autoSave: true } },
+        });
+        task.fail(new Error('AI_TIMEOUT_ERROR'));
+
+        expect(finishBackgroundTaskImport('u1', task.id, undefined, 'late-item')).toBe(false);
+        expect(listBackgroundTasks('u1')[0]).toMatchObject({ status: 'failed', error: 'AI_TIMEOUT_ERROR', canRetry: true });
     });
 
     it('只允许任务所有者重试，重试期间锁定，失败可再次重试', () => {
@@ -103,7 +134,7 @@ describe('后台事务登记', () => {
         expect(list[0]).not.toHaveProperty('userId');
     });
 
-    it('已结束的事务 30 分钟后清理，也可手动清除，进行中的保留', () => {
+    it('已结束的事务 3 小时后清理，也可手动清除，进行中的保留', () => {
         vi.useFakeTimers();
         startBackgroundTask({ userId: 'u1', kind: 'analyze' }).succeed();
         startBackgroundTask({ userId: 'u1', kind: 'svg_animation' });

@@ -47,6 +47,15 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('POST /api/tasks/:id/retry', () => {
+    it('多图识别重试保留所有图片并将完整结果交回导入流程', async () => {
+        const images = ['data:image/png;base64,QQ==', 'data:image/jpeg;base64,Qg=='];
+        mocks.retry!.body.images = images;
+        const fetchMock = vi.fn().mockResolvedValue(Response.json({ questionText: '跨页题' }));
+        vi.stubGlobal('fetch', fetchMock);
+        const response = await POST(new Request('http://localhost/api/tasks/task-1/retry'), context);
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ images });
+        expect(await response.json()).toMatchObject({ retryImport: { images, parsedData: { questionText: '跨页题' } } });
+    });
     it('重试识别时保留人工校对流程，并将图片和结果回传客户端', async () => {
         const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ questionText: '题目', answerText: '答案', analysis: '解析' }));
         vi.stubGlobal('fetch', fetchMock);
@@ -68,7 +77,8 @@ describe('POST /api/tasks/:id/retry', () => {
             'x-background-task-replay': 'test-replay-token',
             'x-background-task-replay-id': 'task-1',
         });
-        expect(mocks.complete).toHaveBeenCalledWith('user-1', 'task-1');
+        // 人工校对模式仍需等待用户保存，保存成功前不能把后台任务标为完成。
+        expect(mocks.complete).not.toHaveBeenCalled();
         expect(mocks.finish).not.toHaveBeenCalled();
     });
 
@@ -92,7 +102,8 @@ describe('POST /api/tasks/:id/retry', () => {
             returnPath: '/',
         } });
         expect(fetchMock).toHaveBeenCalledTimes(1);
-        expect(mocks.complete).toHaveBeenCalledWith('user-1', 'task-1');
+        // 识别结果交回前端后仍需由原保存流程完成入库。
+        expect(mocks.complete).not.toHaveBeenCalled();
     });
 
     it('认证失败时不启动重试', async () => {

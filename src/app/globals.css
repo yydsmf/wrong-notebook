@@ -184,6 +184,17 @@
     page-break-inside: avoid;
   }
 
+  .figure-reading-region {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .figure-readable-image {
+    width: auto !important;
+    max-width: 100% !important;
+    max-height: 360px !important;
+  }
+
   /* Optimize text rendering */
   h1,
   h2,

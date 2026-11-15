@@ -14,5 +14,9 @@ export default defineConfig({
     outputDir: join(run.reportDir, 'artifacts'),
     reporter: [['line'], ['json', { outputFile: join(run.reportDir, 'results.json') }], ['html', { outputFolder: join(run.reportDir, 'html'), open: 'never' }]],
     use: { baseURL: origin, actionTimeout: 15000, navigationTimeout: 30000, trace: 'retain-on-failure', screenshot: 'only-on-failure' },
-    projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } } }],
+    projects: [{ name: 'chromium', use: {
+        ...devices['Desktop Chrome'],
+        ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } } : {}),
+        viewport: { width: 1280, height: 900 },
+    } }],
 });

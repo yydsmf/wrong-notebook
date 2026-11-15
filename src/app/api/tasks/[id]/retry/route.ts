@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/current-user";
 import { unauthorized, internalError, notFound } from "@/lib/api-errors";
 import { BACKGROUND_TASK_REPLAY_HEADER, BACKGROUND_TASK_REPLAY_ID_HEADER, BACKGROUND_TASK_REPLAY_TOKEN, beginBackgroundTaskRetry, completeBackgroundTaskRetry, finishBackgroundTaskRetry } from "@/lib/background-tasks";
-import { withRecoverableResponse } from "@/lib/recoverable-response";
+import { parseRequestId, REQUEST_ID_HEADER, withRecoverableResponse } from "@/lib/recoverable-response";
 
 const RETRY_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -12,7 +12,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
     if (!user) return unauthorized("Authentication required");
 
     const { id } = await params;
-    const retry = beginBackgroundTaskRetry(user.id, id);
+    const retry = beginBackgroundTaskRetry(user.id, id, parseRequestId(req.headers.get(REQUEST_ID_HEADER)) ?? undefined);
     if (!retry) return notFound("Retryable task not found");
     if (!retry.path.startsWith('/api/') || retry.path.startsWith('//')) {
         finishBackgroundTaskRetry(user.id, id, 'RETRY_FAILED');
@@ -43,12 +43,13 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
         } catch {
             // Preserve non-JSON API responses.
         }
-        if (retry.path === '/api/analyze' && response.ok && typeof body === 'object' && body !== null) {
-            const input = retry.body as { imageBase64?: string; subjectId?: string | null; confirmBeforeImport?: boolean; returnPath?: string } | undefined;
+        if (retry.path === '/api/analyze' && response.ok && typeof body === 'object' && body !== null && !('importedQuestion' in body)) {
+            const input = retry.body as { imageBase64?: string; images?: string[]; subjectId?: string | null; confirmBeforeImport?: boolean; returnPath?: string } | undefined;
             body = {
                 retryImport: {
                     parsedData: body,
-                    imageBase64: input?.imageBase64 || '',
+                    imageBase64: input?.imageBase64 || input?.images?.[0] || '',
+                    ...(input?.images ? { images: input.images } : {}),
                     subjectId: input?.subjectId || null,
                     confirmBeforeImport: input?.confirmBeforeImport === true,
                     returnPath: input?.returnPath || '/',
@@ -57,7 +58,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
         }
         if (!response.ok) {
             finishBackgroundTaskRetry(user.id, id, typeof body === 'object' && body !== null && 'message' in body ? String(body.message) : 'RETRY_FAILED');
-        } else {
+        } else if (retry.path !== '/api/analyze') {
             completeBackgroundTaskRetry(user.id, id);
         }
         return NextResponse.json(body, {

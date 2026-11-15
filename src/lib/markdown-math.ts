@@ -91,15 +91,34 @@ export function separateChoiceOptions(text: string, lineBreak: '\n' | '\n\n' = '
     return result;
 }
 
+interface NormalizedMathSegment {
+    source: string;
+    tex: string;
+}
+
 /** 统一公式定界符：\[…\] → $$…$$，\(…\) → $…$，并还原被二次转义的命令 */
-function normalizeMathSegment(segment: string): string {
+function normalizeMathSegment(segment: string): NormalizedMathSegment {
     let math = segment;
     if (math.startsWith('\\[')) {
         math = `$$${math.slice(2, -2)}$$`;
     } else if (math.startsWith('\\(')) {
         math = `$${math.slice(2, -2).trim()}$`;
     }
-    return math.replace(DOUBLE_ESCAPED_COMMAND, '\\');
+
+    math = math.replace(DOUBLE_ESCAPED_COMMAND, '\\');
+    if (!math.startsWith('$$')) return { source: math, tex: math.slice(1, -1) };
+
+    const tex = math.slice(2, -2);
+    const trailingMatch = tex.match(/([。！？；，、]+)\s*$/u);
+    if (!trailingMatch) return { source: math, tex };
+
+    const trailingText = trailingMatch[1];
+    const mathBody = tex.slice(0, trailingMatch.index).trimEnd();
+    return {
+        source: math,
+        // 将句末标点作为公式文本保留，避免 KaTeX 把中文标点当作数学符号解析。
+        tex: `${mathBody}\\text{${trailingText}}`,
+    };
 }
 
 /** 公式以外文字的整理：字面 "\n" 转为换行，选择题选项与题干分行，句末换行转为分段 */
@@ -133,9 +152,14 @@ export interface MathSegment {
 export function extractMathSegments(content: string | null | undefined): { masked: string; segments: MathSegment[] } {
     const segments: MathSegment[] = [];
     const masked = (content ?? '').replace(MATH_SEGMENT, (raw) => {
-        const source = normalizeMathSegment(raw);
+        const normalized = normalizeMathSegment(raw);
+        const source = normalized.source;
         const displayMode = source.startsWith('$$');
-        segments.push({ source, tex: source.slice(displayMode ? 2 : 1, displayMode ? -2 : -1), displayMode });
+        segments.push({
+            source,
+            tex: displayMode ? normalized.tex : source.slice(1, -1),
+            displayMode,
+        });
         return PLACEHOLDER(segments.length - 1);
     });
     return { masked, segments };
@@ -147,5 +171,11 @@ export function extractMathSegments(content: string | null | undefined): { maske
 export function prepareMarkdownMath(content: string | null | undefined): string {
     const { masked, segments } = extractMathSegments(content);
     return escapeAmbiguousMarkdown(normalizeQuestionText(masked))
-        .replace(PLACEHOLDER_PATTERN, (_match, index: string) => segments[Number(index)].source);
+        .replace(PLACEHOLDER_PATTERN, (_match, index: string) => {
+            const segment = segments[Number(index)];
+            if (!segment.displayMode) return segment.source;
+
+            // remark-math 要求块公式的定界符独占一行；AI 常把多行公式直接接在开头 $$ 后。
+            return `\n\n$$\n${segment.tex.trim()}\n$$\n\n`;
+        });
 }

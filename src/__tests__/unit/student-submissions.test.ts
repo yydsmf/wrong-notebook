@@ -52,6 +52,7 @@ const submission = {
 async function expectAnswerVisibility(response: Response) {
     expect(response.status).toBe(200);
     const body = await response.json();
+    expect(body.answers.every((item: { userAnswer: string }) => item.userAnswer === "My answer")).toBe(true);
     expect(body.answers[0]).not.toHaveProperty("answerText");
     expect(body.answers[1]).not.toHaveProperty("analysis");
     expect(body.answers[2]).toMatchObject({ answerText: "Secret answer graded", analysis: "Secret analysis graded" });

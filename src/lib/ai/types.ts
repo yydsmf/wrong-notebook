@@ -1,6 +1,7 @@
 // Re-export the Zod-validated type from schema.ts
 export type { ParsedQuestionFromSchema as ParsedQuestion } from './schema';
 import type { ParsedQuestionFromSchema } from './schema';
+import type { AIImageInput } from './image-input';
 
 // Import and re-export MistakeStatus from the single source of truth
 import type { MistakeStatus } from '../mistake-status';
@@ -101,12 +102,12 @@ export interface CandidateTags {
 export interface AIService {
     /** 只识别年级学期，用于直接录入或外部识别结果缺少年级的情况。 */
     recognizeGrade(questionText: string): Promise<string | null>;
-    analyzeImage(imageBase64: string, mimeType?: string, language?: 'zh' | 'en', grade?: GradeLevel | null, subject?: string | null, gradeSemester?: string | null, candidateTags?: CandidateTags): Promise<ParsedQuestionFromSchema>;
+    analyzeImage(imageBase64: string, mimeType?: string, language?: 'zh' | 'en', grade?: GradeLevel | null, subject?: string | null, gradeSemester?: string | null, candidateTags?: CandidateTags, additionalImages?: AIImageInput[]): Promise<ParsedQuestionFromSchema>;
     /** originalFigureSvg：原题的 SVG 配图，新题需要配图时据此重新绘制 */
     generateSimilarQuestion(originalQuestion: string, knowledgePoints: string[], language?: 'zh' | 'en', difficulty?: DifficultyLevel, gradeSemester?: string | null, originalFigureSvg?: string | null): Promise<ParsedQuestionFromSchema>;
-    /** 根据题目图片单独重绘配图 */
-    generateFigureSvg(imageBase64: string, mimeType: string, questionText?: string | null): Promise<FigureResult>;
-    reanswerQuestion(questionText: string, language?: 'zh' | 'en', subject?: string | null, imageBase64?: string, gradeSemester?: string | null, candidateTags?: CandidateTags): Promise<ReanswerQuestionResult>;
+    /** 根据一道题的一张或多张图片重绘配图；questionText 是最终配图应遵循的题干 */
+    generateFigureSvg(imageBase64: string, mimeType: string, questionText?: string | null, additionalImages?: AIImageInput[]): Promise<FigureResult>;
+    reanswerQuestion(questionText: string, language?: 'zh' | 'en', subject?: string | null, imageBase64?: string, gradeSemester?: string | null, candidateTags?: CandidateTags, additionalImages?: AIImageInput[]): Promise<ReanswerQuestionResult>;
     analyzeForGeogebra(questionText: string, answerText: string, analysis: string, previousErrors?: string): Promise<GeogebraAnalysisResult>;
     /** 只修复各字段中的 LaTeX 语法，返回 AI 修复后的字段内容 */
     fixLatex(input: LatexFixInput): Promise<LatexFixResult>;

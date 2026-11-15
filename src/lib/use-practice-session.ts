@@ -13,6 +13,7 @@ import type { AppConfig, PracticeResult } from "@/types/api";
 export type PracticeDifficulty = "easy" | "medium" | "hard" | "harder";
 
 const DEFAULT_TIMEOUT = 180000;
+const MAX_GENERATION_TIMEOUT = 20 * 60 * 1000;
 
 /** AI 错误码对应的提示，未知错误用默认文案 */
 const AI_ERROR_KEYS = [
@@ -90,6 +91,7 @@ export function usePracticeSession(errorItemId: string | null) {
     }, [errorItemId]);
 
     const timeout = config?.timeouts?.analyze || DEFAULT_TIMEOUT;
+    const generationTimeout = Math.min(timeout * 2, MAX_GENERATION_TIMEOUT);
 
     const generateQuestion = async () => {
         if (!errorItemId) return;
@@ -104,12 +106,12 @@ export function usePracticeSession(errorItemId: string | null) {
         setGradeFailed(false);
         setShowAnswer(false);
         try {
-            frontendLogger.info('[Practice]', 'Generating question', { timeout });
+            frontendLogger.info('[Practice]', 'Generating question', { timeout: generationTimeout });
             const data = await apiClient.post<ParsedQuestion & { generatedAt?: string }>("/api/practice/generate", {
                 errorItemId,
                 language,
                 difficulty,
-            }, { timeout, recoverable: true });
+            }, { timeout: generationTimeout, recoverable: true });
             setQuestion(data);
             setGeneratedDifficulty(difficulty);
             setGeneratedAt(data.generatedAt ?? null);

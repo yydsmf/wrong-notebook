@@ -36,7 +36,7 @@ async function handlePost(
             return validationError("Invalid regenerate request", parsed.error.issues);
         }
 
-        const limited = await consumeAiQuota(user, 'exam');
+        const limited = await consumeAiQuota(user, parsed.data.mode === 'figure' ? 'figure' : 'exam');
         if (limited) return limited;
 
         const updated = await regenerateExamQuestion(id, questionId, user.id, parsed.data.mode, req, parsed.data.language || 'zh');
@@ -45,7 +45,8 @@ async function handlePost(
         const message = error instanceof Error ? error.message : String(error);
         if (message === 'EXAM_QUESTION_NOT_FOUND') return notFound("Exam question not found");
         if (message === 'HAS_RESULTS' || message === 'QUESTION_GENERATING') return conflict(message);
-        if (message === 'SOURCE_DELETED' || message === 'NO_QUESTION_TEXT' || message === 'EMPTY_ANSWER') return badRequest(message);
+        if (message === 'SOURCE_DELETED' || message === 'NO_QUESTION_TEXT' || message === 'EMPTY_ANSWER' || message === 'NO_ORIGINAL_IMAGE' || message === 'NO_FIGURE_GENERATED') return badRequest(message);
+        if (message === 'QUESTION_CHANGED') return conflict(message);
         logger.error({ error: message }, 'Error regenerating exam question');
         return internalError(message.startsWith('AI_') ? message.split(':')[0] : "Failed to regenerate exam question");
     }

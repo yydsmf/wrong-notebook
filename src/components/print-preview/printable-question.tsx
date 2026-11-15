@@ -8,6 +8,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { resolveQuestionAnswerSpacePx } from "@/lib/exam-answer-space";
 import { getPrintableItemTagNames } from "@/lib/print-preview";
 import { parseImageFragments } from "@/lib/image-fragments";
+import { getOriginalImages } from '@/lib/original-images';
 import { usePaperGroups } from "@/lib/use-paper-groups";
 import type { PrintableErrorItem } from "@/types/api";
 import type { PrintDisplayOptions } from "./print-options";
@@ -79,14 +80,15 @@ export function PrintableQuestion({
                     <QuestionFigure svg={item.figureSvg} images={parseImageFragments(item.imageFragments)} scale={item.figureScale} align={item.figureAlign} />
                 </div>
             ) : (
-                item.originalImageUrl && (
+                getOriginalImages(item).length > 0 && (
                     <div className="mb-4">
-                        <img
-                            src={item.originalImageUrl}
+                        {getOriginalImages(item).map((src, index) => <img
+                            key={index}
+                            src={src}
                             alt={t.detail?.originalProblem || 'Question Image'}
                             className="h-auto border rounded"
                             style={{ maxWidth: `${options.imageScale}%` }}
-                        />
+                        />)}
                     </div>
                 )
             )}

@@ -24,11 +24,11 @@ declare global {
 }
 
 interface UploadZoneProps {
-    onImageSelect: (file: File) => void;  // 改为传递 File 对象
+    onImagesSelect: (files: File[]) => void;
     isAnalyzing: boolean;
 }
 
-export function UploadZone({ onImageSelect, isAnalyzing }: UploadZoneProps) {
+export function UploadZone({ onImagesSelect, isAnalyzing }: UploadZoneProps) {
     const { t } = useLanguage();
     const [isScreenshotting, setIsScreenshotting] = useState(false);
     // 确保只在客户端渲染屏幕截图功能
@@ -43,13 +43,9 @@ export function UploadZone({ onImageSelect, isAnalyzing }: UploadZoneProps) {
 
     const onDrop = useCallback(
         (acceptedFiles: File[]) => {
-            const file = acceptedFiles[0];
-            if (file) {
-                // 直接传递 File 对象，让父组件处理压缩
-                onImageSelect(file);
-            }
+            if (acceptedFiles.length > 0) onImagesSelect(acceptedFiles);
         },
-        [onImageSelect]
+        [onImagesSelect]
     );
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -57,20 +53,22 @@ export function UploadZone({ onImageSelect, isAnalyzing }: UploadZoneProps) {
         accept: {
             "image/*": [".jpeg", ".jpg", ".png"],
         },
-        maxFiles: 1,
+        multiple: true,
         disabled: isAnalyzing,
     });
-    // 将剪贴板中的图片 Blob 转为 File 并交给父组件
-    const selectClipboardImage = useCallback(
-        (blob: Blob) => {
-            const type = blob.type || "image/png";
-            const ext = type.split("/")[1] || "png";
-            const file = blob instanceof File && blob.name
-                ? blob
-                : new File([blob], `clipboard-${Date.now()}.${ext}`, { type });
-            onImageSelect(file);
+    // 将剪贴板中的所有图片转为 File，作为同一批交给裁剪流程。
+    const selectClipboardImages = useCallback(
+        (blobs: Blob[]) => {
+            const files = blobs.map((blob, index) => {
+                const type = blob.type || "image/png";
+                const ext = type.split("/")[1] || "png";
+                return blob instanceof File && blob.name
+                    ? blob
+                    : new File([blob], `clipboard-${Date.now()}-${index}.${ext}`, { type });
+            });
+            onImagesSelect(files);
         },
-        [onImageSelect]
+        [onImagesSelect]
     );
 
     // 监听 Ctrl/Cmd+V 粘贴图片
@@ -85,17 +83,19 @@ export function UploadZone({ onImageSelect, isAnalyzing }: UploadZoneProps) {
             }
 
             const items = Array.from(event.clipboardData?.items ?? []);
-            const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
-            const file = imageItem?.getAsFile();
-            if (!file) return;
+            const files = items
+                .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+                .map((item) => item.getAsFile())
+                .filter((file): file is File => file !== null);
+            if (files.length === 0) return;
 
             event.preventDefault();
-            selectClipboardImage(file);
+            onImagesSelect(files);
         };
 
         window.addEventListener("paste", handlePaste);
         return () => window.removeEventListener("paste", handlePaste);
-    }, [isAnalyzing, selectClipboardImage]);
+    }, [isAnalyzing, onImagesSelect]);
 
     // 检查是否支持通过按钮读取剪贴板（需要安全上下文）
     const isClipboardReadSupported = () => {
@@ -114,15 +114,15 @@ export function UploadZone({ onImageSelect, isAnalyzing }: UploadZoneProps) {
 
         try {
             const clipboardItems = await navigator.clipboard.read();
+            const images: Blob[] = [];
             for (const item of clipboardItems) {
                 const imageType = item.types.find((type) => type.startsWith("image/"));
                 if (imageType) {
-                    const blob = await item.getType(imageType);
-                    selectClipboardImage(blob);
-                    return;
+                    images.push(await item.getType(imageType));
                 }
             }
-            toast.warning(t.upload.pasteNoImage);
+            if (images.length > 0) selectClipboardImages(images);
+            else toast.warning(t.upload.pasteNoImage);
         } catch (error) {
             frontendLogger.warn('[UploadZone]', 'Clipboard read failed', {
                 error: error instanceof Error ? error.message : String(error),
@@ -236,7 +236,7 @@ export function UploadZone({ onImageSelect, isAnalyzing }: UploadZoneProps) {
                     const file = new File([blob], `screenshot-${Date.now()}.png`, {
                         type: 'image/png'
                     });
-                    onImageSelect(file);
+                    onImagesSelect([file]);
                     frontendLogger.info('[UploadZone]', 'Screenshot captured', undefined, { sendToBackend: false });
                 } else {
                     toast.error('截图转换失败');
@@ -264,7 +264,7 @@ export function UploadZone({ onImageSelect, isAnalyzing }: UploadZoneProps) {
                     }`}
             >
                 <CardContent className="flex min-h-[260px] flex-col items-center justify-center space-y-4 py-10 text-center md:min-h-[300px]">
-                    <input {...getInputProps()} />
+                    <input {...getInputProps()} disabled={isAnalyzing} />
                     <div className="rounded-2xl bg-accent p-4 text-primary transition-transform group-hover:scale-105">
                         {isAnalyzing ? (
                             <Loader2 className="h-10 w-10 animate-spin" />

@@ -28,7 +28,7 @@ let interrupted = false;
 const interrupt = () => { interrupted = true; for (const child of children) child.kill('SIGTERM'); };
 process.on('SIGINT', interrupt);
 process.on('SIGTERM', interrupt);
-const safeEnvironment = Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM', 'CI'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
+const safeEnvironment = Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM', 'CI', 'PLAYWRIGHT_EXECUTABLE_PATH'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
 const run = (command, arguments_, options = {}) => new Promise((resolve_, reject) => {
     if (interrupted) { reject(new Error('测试运行已中断')); return; }
     const child = spawn(command, arguments_, { cwd: app, env: environment, stdio: ['ignore', 'pipe', 'pipe'], ...options });
@@ -59,8 +59,10 @@ let exitCode = 1;
 let built = false;
 try {
     // 仅复制应用源码与依赖，不带入本机配置、环境文件、数据库或 Git 历史。
-    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
-    for (const name of tracked) {
+    // 本地开发时核心修复可能还未提交，测试隔离目录也必须使用当前工作树；
+    // --exclude-standard 仍遵守 .gitignore，下面再对敏感配置做显式过滤。
+    const workspaceFiles = execFileSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
+    for (const name of workspaceFiles) {
         if (name.startsWith('config/') || /(^|\/)\.env(?:\.|$)/.test(name) || /\.db(?:-|$|\.)/.test(name)) continue;
         const destination = join(app, name);
         mkdirSync(dirname(destination), { recursive: true });

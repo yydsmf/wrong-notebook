@@ -92,6 +92,7 @@ interface ImportData {
         userId: string;
         subjectId: string | null;
         originalImageUrl: string;
+        originalImageUrls?: string | null;
         ocrText: string | null;
         questionText: string | null;
         answerText: string | null;
@@ -149,6 +150,7 @@ interface ImportData {
         wrongAnswerText?: string | null;
         mistakeAnalysis?: string | null;
         originalImageUrl?: string | null;
+        originalImageUrls?: string | null;
         figureSvg?: string | null;
         source?: string;
         examQuestionId?: string | null;
@@ -595,6 +597,7 @@ export async function POST(req: Request) {
                         userId: targetUserId,
                         subjectId: newSubjectId || undefined,
                         originalImageUrl: item.originalImageUrl || '',
+                        originalImageUrls: item.originalImageUrls || null,
                         ocrText: item.ocrText,
                         questionText: item.questionText,
                         answerText: item.answerText,
@@ -789,6 +792,7 @@ export async function POST(req: Request) {
                             wrongAnswerText: record.wrongAnswerText,
                             mistakeAnalysis: record.mistakeAnalysis,
                             originalImageUrl: record.originalImageUrl,
+                            originalImageUrls: record.originalImageUrls || null,
                             figureSvg: sanitizeFigureSvg(record.figureSvg),
                             source: ['practice', 'manual', 'exam', 'duplicate_import'].includes(record.source || '') ? record.source : 'practice',
                             examQuestionId,

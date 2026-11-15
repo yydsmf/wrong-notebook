@@ -1,4 +1,5 @@
 import type { ParsedQuestion } from './types';
+import { normalizeAnswerText } from './answer-format';
 
 /** 只清理生成题目的排版标记，原题识别保持原文。 */
 export function normalizeGeneratedQuestion(question: ParsedQuestion): ParsedQuestion {
@@ -29,5 +30,5 @@ export function normalizeGeneratedQuestion(question: ParsedQuestion): ParsedQues
         throw new Error('AI_RESPONSE_ERROR: 生成题目必须为不含选项的填空题或解答题');
     }
 
-    return { ...question, questionText };
+    return { ...question, questionText, answerText: normalizeAnswerText(question.answerText, questionText) };
 }
