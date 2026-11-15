@@ -85,6 +85,29 @@ export function validateFigureLengths(measurements: readonly FigureLength[], equ
     return true;
 }
 
+/** 仅在同一单位类别的三条完整边均有明确值时精确核对勾股关系，不补单位或求未知数。 */
+export function validateFigureRightTriangleLengths(
+    firstLeg: readonly FigureLength[],
+    secondLeg: readonly FigureLength[],
+    hypotenuse: readonly FigureLength[],
+): boolean {
+    const sides = [firstLeg, secondLeg, hypotenuse];
+    if (!sides.every((side) => validateFigureLengths(side, true))) return false;
+    const parsed = sides.map((side) => side.map((measurement) => parseLengthLabel(measurement.label)));
+    for (const unit of ['metric', 'unitless'] as const) {
+        const known = parsed.map((side) => side.find((value): value is Extract<LengthLabel, { kind: 'length' }> =>
+            value.kind === 'length' && value.unit === unit));
+        const [a, b, c] = known;
+        if (!a || !b || !c) continue;
+        const squared = (value: bigint) => value * value;
+        const first = squared(a.numerator * b.denominator * c.denominator);
+        const second = squared(b.numerator * a.denominator * c.denominator);
+        const third = squared(c.numerator * a.denominator * b.denominator);
+        if (first + second !== third) return false;
+    }
+    return true;
+}
+
 /** 同圆的弦不超过直径；同一对端点的长度标注一致，不根据示意坐标推算长度。 */
 export function validateCircleLengths(circle: CircleLengths): boolean {
     if (!validateFigureLengths([

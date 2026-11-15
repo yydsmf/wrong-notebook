@@ -107,6 +107,36 @@ describe('AI Prompts', () => {
             }
         });
 
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步单个通用多边形的形状边界（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('下图是一个正方形。'), generateSimilarQuestionPrompt(language, '下图是一个正方形。', ['面积'], 'medium')]) {
+                expect(prompt).toContain('可明确对应主图的单个多边形也必须核对题干形状');
+                expect(prompt).toContain('梯形只有一组对边平行');
+                expect(prompt).toContain('不得为通过校验移动点或删除辅助点');
+                expect(prompt).toContain('分段和对角线标签不能当作整边长');
+                expect(prompt).toContain('多个多边形、带圆或外部独立图元时不要强行认定单个主图');
+                expect(prompt).toContain('只使用同一声明中的子类型');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步无 polygon 的闭合线段边界（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('下图是一个正方形。'), generateSimilarQuestionPrompt(language, '下图是一个正方形。', ['面积'], 'medium')]) {
+                expect(prompt).toContain('若没有 polygons');
+                expect(prompt).toContain('所有实线恰好组成一个简单闭合环');
+                expect(prompt).toContain('开链、多个闭合环或额外实线关系不明确');
+                expect(prompt).toContain('虚线内部辅助线可以保留');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步三角形子类型与完整边关系（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('下图是一个等腰直角三角形。'), generateSimilarQuestionPrompt(language, '下图是一个等腰直角三角形。', ['三角形'], 'medium')]) {
+                expect(prompt).toContain('等腰直角必须是两条直角边等长');
+                expect(prompt).toContain('三条完整边都有同类单位的明确数值时精确核对勾股关系');
+                expect(prompt).toContain('面积图的高只有在apexRatio为0或1时才是完整边');
+                expect(prompt).toContain('范围0至1、默认0.5');
+                expect(prompt).toContain('不从其它三角形、疑问或待证明内容补条件');
+            }
+        });
+
         it('重绘和新题配图对已知数精确核对整数位数，不填掉未知答案', () => {
             for (const prompt of [generateFigurePrompt('两位数乘25'), generateSimilarQuestionPrompt('zh', '两位数乘25', ['乘法'], 'medium')]) {
                 expect(prompt).toContain('符号和前导零不计入位数');
@@ -129,6 +159,8 @@ describe('AI Prompts', () => {
             const prompt = generateFigurePrompt('图中标注为 \\$\\frac{1}{2}\\$');
             expect(prompt).toContain('SVG 文本不经过 KaTeX 排版');
             expect(prompt).toContain('参数之间有空格的形式：\\frac {1} {2}');
+            expect(prompt).toContain('\\mathbb {R}');
+            expect(prompt).toContain('\\overset {?} {=}');
             expect(prompt).toContain('成对的 \\left ... \\right');
             expect(prompt).toContain('不要把公式拆开、改写或自行求值');
             expect(prompt).toContain('使用完整旧 SVG、原图或手动配图兜底');

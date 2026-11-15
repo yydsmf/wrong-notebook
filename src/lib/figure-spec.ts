@@ -187,7 +187,7 @@ const areaGeometrySchema = z.object({
     height: z.number().finite().positive().max(100),
     topWidth: z.number().finite().positive().max(100).optional(),
     offset: z.number().finite().min(-50).max(50).optional(),
-    apexRatio: z.number().finite().min(0.05).max(0.95).optional(),
+    apexRatio: z.number().finite().min(0).max(1).optional(),
     baseLabel: z.string().max(40).optional(),
     heightLabel: z.string().max(40).optional(),
     topLabel: z.string().max(40).optional(),
@@ -1564,7 +1564,9 @@ function renderAreaGeometry(spec: z.infer<typeof areaGeometrySchema>): FigureDra
         const next = polygon[(index + 1) % polygon.length];
         content.push(labels.line(point.x, point.y, next.x, next.y));
     });
-    content.push(labels.line(heightFrom.x, heightFrom.y, heightTo.x, heightTo.y, { dashed: true, width: 1.8 }));
+    // 顶点落在底边端点时，高本身就是三角形外边；保留外边实线，避免再叠画一条虚线。
+    const heightIsBoundary = spec.shape === 'triangle' && (spec.apexRatio === 0 || spec.apexRatio === 1);
+    if (!heightIsBoundary) content.push(labels.line(heightFrom.x, heightFrom.y, heightTo.x, heightTo.y, { dashed: true, width: 1.8 }));
     if (Math.abs(heightFrom.y - heightTo.y) >= 18) {
         const baseLeft = polygon[0]!.x;
         const baseRight = polygon[1]!.x;

@@ -52,6 +52,23 @@ export const STRUCTURED_FIGURE_FIXTURES: FigureSpecFixture[] = [
         mustContain: ['>甲区域</text>', '>A</text>', '>B</text>', '>C</text>', '>D</text>'],
     },
     {
+        id: 'primary-line-cycle-square', stage: '小学', type: 'basic_geometry',
+        spec: {
+            type: 'basic_geometry',
+            points: [
+                { id: 'A', x: 20, y: 20, label: 'A' }, { id: 'B', x: 80, y: 20, label: 'B' },
+                { id: 'C', x: 80, y: 80, label: 'C' }, { id: 'D', x: 20, y: 80, label: 'D' },
+            ],
+            segments: [
+                { from: 'C', to: 'D' }, { from: 'A', to: 'B' },
+                { from: 'D', to: 'A' }, { from: 'B', to: 'C' },
+                { from: 'A', to: 'C', dashed: true },
+            ],
+        },
+        mustContain: ['>A</text>', '>B</text>', '>C</text>', '>D</text>', 'stroke-dasharray="7 5"'],
+        elementMinimums: { line: 5, circle: 4, text: 4 },
+    },
+    {
         id: 'junior-title-coordinate', stage: '初中', type: 'coordinate_plane',
         spec: {
             type: 'coordinate_plane', title: '横纵轴等单位长度', xMin: 0, xMax: 4, yMin: 0, yMax: 8,
@@ -142,6 +159,20 @@ export const STRUCTURED_FIGURE_FIXTURES: FigureSpecFixture[] = [
         type: 'area_geometry',
         spec: { type: 'area_geometry', shape: 'triangle', width: 6, height: 4, apexRatio: 0.35, baseLabel: '底6', heightLabel: '高4' },
         mustContain: ['底6', '高4', 'stroke-dasharray="7 5"'],
+        elementMinimums: { polygon: 1, line: 1, path: 1 },
+    },
+    {
+        id: 'primary-area-right-triangle-left-endpoint',
+        stage: '小学', type: 'area_geometry',
+        spec: { type: 'area_geometry', shape: 'triangle', width: 6, height: 3, apexRatio: 0, baseLabel: '底6cm', heightLabel: '高3cm', title: '左端直角三角形' },
+        mustContain: ['底6cm', '高3cm', '左端直角三角形'],
+        elementMinimums: { polygon: 1, line: 1, path: 1 },
+    },
+    {
+        id: 'primary-area-right-triangle-right-endpoint',
+        stage: '小学', type: 'area_geometry',
+        spec: { type: 'area_geometry', shape: 'triangle', width: 6, height: 3, apexRatio: 1, baseLabel: '底6cm', heightLabel: '高3cm', title: '右端直角三角形' },
+        mustContain: ['底6cm', '高3cm', '右端直角三角形'],
         elementMinimums: { polygon: 1, line: 1, path: 1 },
     },
     {

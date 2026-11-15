@@ -5,9 +5,12 @@ const unitExpression = String.raw`${unit}(?:\s*[\/·]\s*${unit})?`;
 const unitPattern = new RegExp(`^(?:${unitExpression})[,.]*$`, 'u');
 const delimitedMath = /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?:\\.|[^$\\\n])+?\$/g;
 const mathRun = new RegExp(String.raw`[\p{Script=Latin}\p{Script=Greek}\p{N}\p{M}\u2070-\u209f\u2100-\u214f\u{1d400}-\u{1d7ff}+\-−±×÷*=<>≤≥≠≈.,:∶\/⁄%‰°′″^()[\]{}√∛∜⋅·\\]+(?:\s*${chineseUnit}(?:\s*\/\s*${chineseUnit})?)?`, 'uy');
-const rawLatexCommands = new Set([
-    'angle', 'binom', 'boxed', 'dfrac', 'frac', 'mathit', 'mathbf', 'mathrm', 'overline', 'overrightarrow',
-    'left', 'sqrt', 'text', 'tfrac', 'triangle', 'underline', 'vec',
+// 这里只保护可完整识别参数的有限命令；不认识或参数不完整时交给普通分词和整图回退。
+const rawLatexCommandArity = new Map<string, 1 | 2>([
+    ['angle', 1], ['binom', 2], ['boxed', 1], ['dfrac', 2], ['frac', 2], ['mathbb', 1], ['mathcal', 1],
+    ['mathit', 1], ['mathbf', 1], ['mathrm', 1], ['operatorname', 1], ['overbrace', 1], ['overline', 1],
+    ['overrightarrow', 1], ['overset', 2], ['pmb', 1], ['sqrt', 1], ['stackrel', 2], ['substack', 1],
+    ['text', 1], ['tfrac', 2], ['triangle', 1], ['underbrace', 1], ['underline', 1], ['underset', 2], ['vec', 1],
 ]);
 const numberMarker = /[\p{N}\u2070-\u209f′″]/u;
 const mathMarker = /[\p{Lm}+−±×÷*=<>≤≥≠≈:∶\/⁄^√∛∜⋅]/u;
@@ -93,12 +96,13 @@ function readLeftRightExpression(value: string, offset: number): number | null {
 function readRawLatex(value: string, offset: number): number | null {
     if (value[offset] !== '\\') return null;
     const command = /^\\([A-Za-z]+)/u.exec(value.slice(offset))?.[1];
-    if (!command || !rawLatexCommands.has(command)) return null;
+    if (!command) return null;
     let cursor = offset + command.length + 1;
     if (command === 'left') {
         return readLeftRightExpression(value, cursor);
     }
-    const groupCount = ['binom', 'dfrac', 'frac', 'tfrac'].includes(command) ? 2 : 1;
+    const groupCount = rawLatexCommandArity.get(command);
+    if (groupCount === undefined) return null;
     if (command === 'sqrt') {
         cursor = skipLatexWhitespace(value, cursor);
         if (value[cursor] === '[') {

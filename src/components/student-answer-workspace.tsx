@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ImagePlus, Loader2, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { QuestionFigure } from "@/components/question-figure";
 import { QuestionTextRenderer } from "@/components/question-text-renderer";
 import { Textarea } from "@/components/ui/textarea";
@@ -226,12 +227,30 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId }: Student
                                             ? t.studentAnswer.grading
                                             : result.status === "failed" ? t.studentAnswer.failed : result.isCorrect ? t.studentAnswer.correct : t.studentAnswer.incorrect}
                                     </p>
-                                    {result.reason && <p className="text-sm text-muted-foreground">{t.studentAnswer.reason}：{result.reason}</p>}
-                                    {result.mistakeAnalysis && <p className="text-sm"><span className="font-medium">{t.studentAnswer.mistake}：</span>{result.mistakeAnalysis}</p>}
+                                    {result.reason && (
+                                        <div className="text-sm text-muted-foreground">
+                                            <p className="font-medium">{t.studentAnswer.reason}：</p>
+                                            <MarkdownRenderer content={result.reason} />
+                                        </div>
+                                    )}
+                                    {result.mistakeAnalysis && (
+                                        <div className="text-sm">
+                                            <p className="font-medium">{t.studentAnswer.mistake}：</p>
+                                            <MarkdownRenderer content={result.mistakeAnalysis} />
+                                        </div>
+                                    )}
                                     {result.status === "graded" && !result.isCorrect && result.answerText && (
                                         <div className="space-y-2 rounded-md bg-muted/50 p-3 text-sm">
-                                            <p><span className="font-medium">{t.studentAnswer.referenceAnswer}：</span>{result.answerText}</p>
-                                            {result.analysis && <p><span className="font-medium">{t.studentAnswer.analysis}：</span>{result.analysis}</p>}
+                                            <div>
+                                                <p className="font-medium">{t.studentAnswer.referenceAnswer}：</p>
+                                                <MarkdownRenderer content={result.answerText} />
+                                            </div>
+                                            {result.analysis && (
+                                                <div>
+                                                    <p className="font-medium">{t.studentAnswer.analysis}：</p>
+                                                    <MarkdownRenderer content={result.analysis} />
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -289,13 +308,31 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId }: Student
                                 </div>
                                 <p className={`text-sm font-medium ${answer.isCorrect ? "text-green-700 dark:text-green-400" : "text-destructive"}`}>
                                     {answer.status === "failed" ? t.studentAnswer.failed : answer.isCorrect ? t.studentAnswer.correct : t.studentAnswer.incorrect}
-                                    {answer.reason ? ` · ${answer.reason}` : ""}
                                 </p>
-                                {answer.mistakeAnalysis && <p className="text-sm"><span className="font-medium">{t.studentAnswer.mistake}：</span>{answer.mistakeAnalysis}</p>}
+                                {answer.reason && (
+                                    <div className="text-sm text-muted-foreground">
+                                        <p className="font-medium">{t.studentAnswer.reason}：</p>
+                                        <MarkdownRenderer content={answer.reason} />
+                                    </div>
+                                )}
+                                {answer.mistakeAnalysis && (
+                                    <div className="text-sm">
+                                        <p className="font-medium">{t.studentAnswer.mistake}：</p>
+                                        <MarkdownRenderer content={answer.mistakeAnalysis} />
+                                    </div>
+                                )}
                                 {answer.status === "graded" && answer.answerText && (
                                     <div className="space-y-2 rounded-md bg-muted/50 p-3 text-sm">
-                                        <p><span className="font-medium">{t.studentAnswer.referenceAnswer}：</span>{answer.answerText}</p>
-                                        {answer.analysis && <p><span className="font-medium">{t.studentAnswer.analysis}：</span>{answer.analysis}</p>}
+                                        <div>
+                                            <p className="font-medium">{t.studentAnswer.referenceAnswer}：</p>
+                                            <MarkdownRenderer content={answer.answerText} />
+                                        </div>
+                                        {answer.analysis && (
+                                            <div>
+                                                <p className="font-medium">{t.studentAnswer.analysis}：</p>
+                                                <MarkdownRenderer content={answer.analysis} />
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </CardContent>

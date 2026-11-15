@@ -1,9 +1,17 @@
 import type { FigureSpec } from './figure-spec';
 import { validateFigureLengths } from './figure-measurements';
+import { validateFigurePolygonShape } from './figure-polygon-consistency';
+import type { PolygonQuestionShape } from './figure-polygon-consistency';
+import { validateFigureTriangle } from './figure-triangle-consistency';
+import type { TriangleQuestionConstraint } from './figure-triangle-consistency';
 import { arithmeticDigitCountMatches, arithmeticOperandMatches, extractFigureArithmeticConstraints } from './figure-arithmetic-constraints';
 import type { FigureArithmeticConstraint } from './figure-arithmetic-constraints';
 
-type ExplicitQuestionShape = 'triangle' | 'rectangle' | 'square' | 'parallelogram' | 'trapezoid' | 'cube' | 'cuboid';
+type ExplicitQuestionShape = PolygonQuestionShape | 'cube' | 'cuboid';
+interface QuestionShapeAssertion {
+    shape: ExplicitQuestionShape;
+    triangle?: TriangleQuestionConstraint;
+}
 
 const QUESTION_SHAPE_PATTERNS: Array<{ shape: ExplicitQuestionShape; pattern: RegExp }> = [
     { shape: 'triangle', pattern: /三角形|\btriangles?\b/iu },
@@ -15,7 +23,7 @@ const QUESTION_SHAPE_PATTERNS: Array<{ shape: ExplicitQuestionShape; pattern: Re
     { shape: 'cuboid', pattern: /长方体|\bcuboids?\b|\brectangular prisms?\b/iu },
 ];
 
-const FIGURE_ASSERTION_PREFIX = String.raw`(?:(?:下图|该图|此图|图形)(?:所示)?(?:是|为)(?:一个|一块|一张)?(?:等腰|等边|直角)?|\b(?:the|this)\s+(?:figure|shape|diagram|solid)\s+is\s+(?:a|an)\s+(?:(?:right|isosceles|equilateral)\s+)?)`;
+const FIGURE_ASSERTION_PREFIX = String.raw`(?:(?:下图|该图|此图|图形)(?:所示)?(?:是|为)(?:一个|一块|一张)?(?<chineseModifiers>(?:等腰|等边|直角){0,3})|\b(?:the|this)\s+(?:figure|shape|diagram|solid)\s+is\s+(?:a|an)\s+(?<englishModifiers>(?:(?:right(?:[-\s]+angled)?|isosceles|equilateral)[-\s]+){0,3}))`;
 const AMBIGUOUS_SHAPE_CONTEXT = /不是|并非|不一定|不为|还是|\b(?:not|isn't|isn’t|might|could)\b/iu;
 const UNCERTAIN_ASSERTION_CONTEXT = /是否|判断|能否|证明|试问|请问|猜测|认为|声称|说|如果|若|假设|假如|倘若|只要|只有|除非|当|[?？]|吗|么|呢|\b(?:which|whether|if|when|unless|assum(?:e|ing)|suppos(?:e|ing)|provided|prove|show|determine|decide|judge|says?|said|claims?|thinks?)\b|\bis\s+it\s+(?:true|correct)\b|\btrue\s+or\s+false\b/iu;
 const ASSERTION_QUESTION_TAG = /^\s*(?:(?:(?:这一|这个|这|该|此)(?:句话|说法|判断|结论|陈述)\s*)?(?:对吗|对不对|正确吗|成立吗|(?:是否|是不是)(?:正确|成立|属实|为真|这样|如此|真的))|(?:是否|是不是)\s*[?。;]?\s*$|(?:right|correct|true)\s*[?!;.]?\s*$|true\s+or\s+false\b|is\s+(?:it|this|that)(?:\s+(?:statement|claim|assertion))?\s+(?:true|correct|right)\b|is\s+(?:it|this|that)\s*[?!;.]?\s*$)/iu;
@@ -27,7 +35,7 @@ function normalizeQuestionText(value: string): string {
     return value.replace(/[\uff01-\uff5e]/g, (character) => String.fromCharCode(character.charCodeAt(0) - 0xfee0));
 }
 
-function uniqueQuestionShape(questionText: string): ExplicitQuestionShape | null {
+function uniqueQuestionShape(questionText: string): QuestionShapeAssertion | null {
     if (AMBIGUOUS_SHAPE_CONTEXT.test(questionText) || PARTIAL_FIGURE_QUESTION.test(questionText)) return null;
     const shapes = QUESTION_SHAPE_PATTERNS.filter(({ pattern }) => pattern.test(questionText));
     if (shapes.length !== 1) return null;
@@ -47,23 +55,40 @@ function uniqueQuestionShape(questionText: string): ExplicitQuestionShape | null
                 || ASSERTION_REVIEW_COMMAND.test(clause) || ASSERTION_POSTCONDITION.test(clause))) continue;
             const nextSentence = sentences[index + 1] ?? '';
             if (ASSERTION_QUESTION_TAG.test(nextSentence) || ASSERTION_REVIEW_COMMAND.test(nextSentence)) continue;
-            return candidate.shape;
+            const modifiers = match.groups?.chineseModifiers || match.groups?.englishModifiers || '';
+            const triangle = candidate.shape === 'triangle' && modifiers ? {
+                isosceles: /等腰|isosceles/iu.test(modifiers),
+                equilateral: /等边|equilateral/iu.test(modifiers),
+                right: /直角|right/iu.test(modifiers),
+            } : undefined;
+            return { shape: candidate.shape, ...(triangle ? { triangle } : {}) };
         }
     }
     return null;
 }
 
-function matchesAreaShape(spec: Extract<FigureSpec, { type: 'area_geometry' }>, expected: ExplicitQuestionShape): boolean {
+function matchesAreaShape(spec: Extract<FigureSpec, { type: 'area_geometry' }>, expected: QuestionShapeAssertion): boolean {
     const rectangle = spec.shape === 'rectangle' || spec.shape === 'square'
         || (spec.shape === 'parallelogram' && (spec.offset ?? 0) === 0);
-    switch (expected) {
+    switch (expected.shape) {
         case 'square':
             return rectangle
                 && Math.abs(spec.width - spec.height) <= Math.max(0.01, spec.width * 0.02)
                 && validateFigureLengths([{ label: spec.baseLabel }, { label: spec.heightLabel }, { label: spec.topLabel }], true);
         case 'rectangle': return rectangle;
         case 'parallelogram': return rectangle || spec.shape === 'parallelogram';
-        case 'triangle': return spec.shape === 'triangle';
+        case 'triangle': {
+            if (spec.shape !== 'triangle') return false;
+            if (!expected.triangle) return true;
+            const apexRatio = spec.apexRatio ?? 0.5;
+            return validateFigureTriangle([
+                { x: 0, y: 0 }, { x: spec.width, y: 0 }, { x: spec.width * apexRatio, y: spec.height },
+            ], [
+                [{ label: spec.baseLabel }],
+                apexRatio === 1 ? [{ label: spec.heightLabel }] : [],
+                apexRatio === 0 ? [{ label: spec.heightLabel }] : [],
+            ], expected.triangle);
+        }
         case 'trapezoid': return spec.shape === 'trapezoid';
         // 立体题可能只绘制一个面，不把立体形状强加给面积模板。
         default: return true;
@@ -99,7 +124,10 @@ export function validateFigureQuestionConsistency(spec: FigureSpec, questionText
         return matchesAreaShape(spec, questionShape);
     }
     if (questionShape && spec.type === 'solid_geometry') {
-        return matchesSolidShape(spec, questionShape);
+        return matchesSolidShape(spec, questionShape.shape);
+    }
+    if (questionShape && spec.type === 'basic_geometry' && questionShape.shape !== 'cube' && questionShape.shape !== 'cuboid') {
+        return validateFigurePolygonShape(spec, questionShape.shape, questionShape.triangle);
     }
     if (spec.type !== 'vertical_arithmetic') return true;
     return extractFigureArithmeticConstraints(normalizedQuestion).every((constraint) => matchesArithmeticConstraint(spec, constraint));
