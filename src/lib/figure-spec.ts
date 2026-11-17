@@ -338,6 +338,15 @@ const lineChartSchema = z.object({
     .refine((value) => value.maxValue === undefined || value.minValue === undefined || value.maxValue > value.minValue,
         'line_chart maxValue must be greater than minValue');
 
+const pieChartSchema = z.object({
+    type: z.literal('pie_chart'),
+    categories: z.array(z.string().min(1).max(30)).min(2).max(8),
+    values: z.array(z.number().finite().min(0)).min(2).max(8),
+    unit: z.string().max(20).optional(),
+    title: z.string().max(100).optional(),
+}).refine((value) => value.categories.length === value.values.length, 'pie_chart categories and values must match')
+    .refine((value) => value.values.some((number) => number > 0), 'pie_chart values must contain a positive value');
+
 const gridShapeSchema = z.object({
     type: z.literal('grid_shape'),
     rows: z.number().int().min(1).max(30),
@@ -367,6 +376,7 @@ const singleFigureSchemas = [
     basicGeometrySchema,
     barChartSchema,
     lineChartSchema,
+    pieChartSchema,
     gridShapeSchema,
     tableSchema,
 ] as const;
@@ -707,6 +717,7 @@ function normalizeSingleFigureSpec(spec: SingleFigureSpec): SingleFigureSpec {
             };
         case 'bar_chart':
         case 'line_chart':
+        case 'pie_chart':
             return {
                 ...spec,
                 categories: spec.categories.map(normalizeText),
@@ -1269,6 +1280,11 @@ function validateFigureSpec(spec: FigureSpec): boolean {
                 && (spec.minValue === undefined || spec.minValue <= Math.min(...spec.values))
                 && getFigureChartDomain(spec) !== null
                 && validateChartTickStep(spec)
+                && (!spec.unit || validDisplayText(spec.unit, 16))
+                && (!spec.title || validDisplayText(spec.title, 60));
+        case 'pie_chart':
+            return spec.values.some((value) => value > 0)
+                && spec.values.every((value) => value >= 0)
                 && (!spec.unit || validDisplayText(spec.unit, 16))
                 && (!spec.title || validDisplayText(spec.title, 60));
         case 'grid_shape': {
@@ -2598,6 +2614,63 @@ function renderChart(spec: z.infer<typeof barChartSchema> | z.infer<typeof lineC
     return root(content.join(''));
 }
 
+const PIE_FILLS = ['#dbeafe', '#e5e7eb', '#bfdbfe', '#9ca3af', '#93c5fd', '#6b7280', '#d1d5db', '#4b5563'];
+
+function renderPieChart(spec: z.infer<typeof pieChartSchema>): FigureDrawing | null {
+    const total = spec.values.reduce((sum, value) => sum + value, 0);
+    if (!Number.isFinite(total) || total <= 0) return null;
+
+    const center = { x: 245, y: 260 };
+    const radius = 145;
+    const legendX = 475;
+    const legendWidth = 290;
+    const titleBox = spec.title ? chartTextBox(400, 35, spec.title, 22, 700) : null;
+    if ((spec.title && !titleBox) || (spec.unit && fitFontSize(spec.unit, 18, 100) < 12)) return null;
+
+    const legend = spec.categories.map((category, index) => {
+        const value = spec.values[index]!;
+        const valueText = `${category}：${String(value)}${spec.unit ? ` ${spec.unit}` : ''}`;
+        const lines = wrapTextLines(valueText, 16, legendWidth);
+        if (!wrappedLinesFit(lines, 16, legendWidth)) return null;
+        return { valueText, lines, height: Math.max(28, lines.length * textLineGap(16) + 6) };
+    });
+    if (legend.some((entry) => entry === null)) return null;
+    const legendEntries = legend as Array<{ valueText: string; lines: string[]; height: number }>;
+    const legendHeight = legendEntries.reduce((sum, entry) => sum + entry.height, 0);
+    if (legendHeight > 390) return null;
+
+    const content: string[] = [];
+    let angle = -Math.PI / 2;
+    spec.values.forEach((value, index) => {
+        if (value <= 0) return;
+        const delta = value / total * Math.PI * 2;
+        const endAngle = angle + delta;
+        const start = { x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius };
+        const end = { x: center.x + Math.cos(endAngle) * radius, y: center.y + Math.sin(endAngle) * radius };
+        const fill = PIE_FILLS[index]!;
+        if (delta >= Math.PI * 2 - 0.0001) {
+            content.push(`<circle cx="${finite(center.x)}" cy="${finite(center.y)}" r="${finite(radius)}" fill="${fill}" stroke="${COLORS.black}" stroke-width="2"/>`);
+        } else {
+            content.push(path(
+                `M ${finite(center.x)} ${finite(center.y)} L ${finite(start.x)} ${finite(start.y)} A ${finite(radius)} ${finite(radius)} 0 ${delta > Math.PI ? 1 : 0} 1 ${finite(end.x)} ${finite(end.y)} Z`,
+                { fill, width: 2 },
+            ));
+        }
+        angle = endAngle;
+    });
+    content.push(`<circle cx="${finite(center.x)}" cy="${finite(center.y)}" r="${finite(radius)}" fill="none" stroke="${COLORS.black}" stroke-width="2"/>`);
+    if (spec.title) content.push(text(400, 35, spec.title, { size: 22, maxWidth: 700, title: true }));
+
+    let legendY = 95;
+    legendEntries.forEach((entry, index) => {
+        const swatchY = legendY - 15;
+        content.push(`<rect x="${finite(legendX)}" y="${finite(swatchY)}" width="18" height="18" fill="${PIE_FILLS[index]!}" stroke="${COLORS.black}" stroke-width="1"/>`);
+        content.push(textWithLineWrap(legendX + 30, legendY, entry.valueText, { size: 16, maxWidth: legendWidth, anchor: 'start' }));
+        legendY += entry.height;
+    });
+    return root(content.join(''));
+}
+
 function chartAxisTickLayout(
     ticks: readonly FigureAxisTick[],
     axisX: number,
@@ -2791,6 +2864,7 @@ function renderParsedFigureSpec(spec: SingleFigureSpec): FigureDrawing | null {
         case 'basic_geometry': return renderGeometry(spec);
         case 'bar_chart':
         case 'line_chart': return renderChart(spec);
+        case 'pie_chart': return renderPieChart(spec);
         case 'grid_shape': return renderGrid(spec);
         case 'table': return renderTable(spec);
         default: return null;

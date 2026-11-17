@@ -214,7 +214,7 @@ export const FIGURE_SVG_RULES = `- 输出一个完整的 <svg> 元素，包含 x
 /** 结构化配图规则：模型只识别数据，程序按固定模板绘制 SVG。 */
 export const FIGURE_SPEC_RULES = `【结构化配图优先规则】
 - 优先输出一个 JSON 对象描述图形结构，程序会按模板绘制 SVG；不要在 JSON 中写 SVG、HTML、Markdown 或解释文字。
-- 只允许以下 type：vertical_arithmetic、fraction、number_line、coordinate_plane、circle_geometry、area_geometry、solid_geometry、round_solid、sphere_geometry、basic_geometry、bar_chart、line_chart、grid_shape、table、figure_group。
+- 只允许以下 type：vertical_arithmetic、fraction、number_line、coordinate_plane、circle_geometry、area_geometry、solid_geometry、round_solid、sphere_geometry、basic_geometry、bar_chart、line_chart、pie_chart、grid_shape、table、figure_group。
 - 无法用这些类型准确表达时，figure_spec 留空，再把完整配图放入 figure_svg；不要为了套模板而猜测数据。
 - 所有题目中的数字、单位、字母、甲乙标签和相对位置必须以目标题干和参考图片为准，不能复制旧题数据。
 - 题干明确声明主图形状时，figure_spec 必须画出对应形状并核对相对尺寸与标注；允许用等边矩形表达正方形、等棱长方体表达正方体。仅出现形状词、平方单位、形状判断题、阴影或截面等局部图、多形状或图组时，不要把单一形状条件套到所有图；无法确认就留空 figure_spec。
@@ -259,6 +259,7 @@ export const FIGURE_SPEC_RULES = `【结构化配图优先规则】
 - 同圆有可比较的明确长度时，弦长不能超过直径或半径的两倍；同一对端点无论顺序如何，作为弦或直径时的明确长度必须一致。无单位值只和其它无单位值比较，不从其它标注补单位；未知值不能遮住已知长度间的矛盾。不得根据相对绘图半径、弦的角度或坐标比例推算实际长度，无法确认的表达式保留原文，不强行求值。
 - 同圆 points 中的不同 id 必须表示不同的圆周点。小幅径向坐标误差会沿原方向对齐圆周，对齐后仍不能重合或形成零长度弦，直径两端在对齐后仍须经过圆心；不能为通过校验而合并点名、删除线段或移动端点。无法确认原图中的点位关系时留空 figure_spec，使用完整旧 SVG/原图回退。
 - bar_chart/line_chart：categories 与 values 数量必须一致，数据必须逐项对应；可选 maxValue、minValue、tickStep、unit、title。tickStep 只在原图纵轴刻度间隔清楚时填写，必须保留原图的数值间隔，无法确认时省略，不要猜测。bar_chart 保留 0 基线，maxValue 必须覆盖所有 values，数据值必须完整保留；line_chart 的 maxValue 必须大于 minValue 且覆盖所有 values，未提供边界时不要为了好看把小数数据上限补成 1，不要把全负数数据改成正数范围。无法确认坐标范围、刻度间隔或标注无法完整排版时留空 figure_spec。
+- pie_chart：categories 与 values 数量必须一致，支持 2~8 个扇区，values 可以是人数、数量或百分比等非负原始数据，但至少有一个正数；可选 unit、title。只填写原图中逐项可确认的类别和数值，不能为了凑成 100 或好看而改写、四舍五入或补值；零值类别仍保留在 categories 和 values 中但不绘制扇区。程序按原始 values 计算扇区比例，并在图例中完整显示类别、数值和单位；类别、数值、单位或对应关系不清楚时留空 figure_spec。
 - grid_shape：rows、cols、filledCells、cellLabels、title?；行列从 0 开始，所有格子必须在网格内，同一格不能重复填色或重复标注。cellLabels 必须完整保留原有文字及所属行列，不能为了排版缩写、删字、拆到其它格子或改变行列数；程序会保持正方格、按需扩大画布，并将格内文字排成最多三行，装不下时回退。不确定的格子不要猜，无法确认整体结构时留空 figure_spec。
 - table：headers 和 rows，保留表格中可见的标题、单位和空单元格；列数、标题或单元格对应关系不确定时留空 figure_spec。
 - figure_group：{type:"figure_group",title?,compareSizes?:boolean,figures:[{label,figure}]}。compareSizes 是可选布尔值，默认 false；用于同一道题的 2~6 张独立子图或选项图；label 完整保留原图的 A/B/C/D、甲乙或图号，不能为空或重复；figures 必须按原题顺序完整列出，每个 figure 使用上面一种单图结构，不能嵌套 figure_group，不能跨子图引用点。各子图的 id 只在本图内生效，允许不同选项重复使用同一顶点字母。

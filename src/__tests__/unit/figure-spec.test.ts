@@ -870,6 +870,49 @@ describe('structured figure specs', () => {
         }))).toBeNull();
     });
 
+    it('渲染扇形统计图时保留原始数值、单位和类别，按原始比例绘制扇区', () => {
+        const raw = {
+            type: 'pie_chart',
+            categories: ['语文', '数学', '英语'],
+            values: [4, 3, 2],
+            unit: '人',
+            title: '最喜欢的学科',
+        };
+        const svg = renderFigureSpec(JSON.stringify(raw));
+        expect(svg).not.toBeNull();
+        expect(svg).toBe(renderFigureSpec(JSON.stringify(raw)));
+        expect(svg).toContain('语文：4 人');
+        expect(svg).toContain('数学：3 人');
+        expect(svg).toContain('英语：2 人');
+        expect(svg).toContain('最喜欢的学科');
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        expect(document.querySelectorAll('path')).toHaveLength(3);
+        expect(document.querySelectorAll('rect')).toHaveLength(4);
+        expect(document.querySelectorAll('circle')).toHaveLength(1);
+        expect(svg).not.toMatch(/NaN|Infinity|undefined/);
+    });
+
+    it('扇形统计图保留零值类别但不生成零面积扇区，并拒绝全零数据', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'pie_chart', categories: ['甲', '乙', '丙'], values: [4, 0, 2],
+        }));
+        expect(svg).not.toBeNull();
+        expect(svg).toContain('乙：0');
+        expect(new DOMParser().parseFromString(svg!, 'image/svg+xml').querySelectorAll('path')).toHaveLength(2);
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'pie_chart', categories: ['甲', '乙'], values: [0, 0],
+        }))).toBeNull();
+    });
+
+    it('扇形统计图分类过多或对应关系不完整时回退', () => {
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'pie_chart', categories: Array.from({ length: 9 }, (_, index) => `分类${index + 1}`), values: Array<number>(9).fill(1),
+        }))).toBeNull();
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'pie_chart', categories: ['甲', '乙'], values: [1],
+        }))).toBeNull();
+    });
+
     it('renders a coordinate plane with points and segments from structured data', () => {
         const svg = renderFigureSpec(JSON.stringify({
             type: 'coordinate_plane',

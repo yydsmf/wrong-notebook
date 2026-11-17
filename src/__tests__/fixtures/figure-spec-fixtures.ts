@@ -276,6 +276,14 @@ export const STRUCTURED_FIGURE_FIXTURES: FigureSpecFixture[] = [
         elementMinimums: { rect: 4, line: 2, text: 8 },
     },
     {
+        id: 'primary-pie-chart',
+        stage: '小学',
+        type: 'pie_chart',
+        spec: { type: 'pie_chart', categories: ['语文', '数学', '英语'], values: [4, 3, 2], unit: '人', title: '最喜欢的学科' },
+        mustContain: ['语文：4 人', '数学：3 人', '英语：2 人', '最喜欢的学科'],
+        elementMinimums: { circle: 1, path: 3, rect: 4, text: 4 },
+    },
+    {
         id: 'primary-bar-chart-long-categories',
         stage: '小学',
         type: 'bar_chart',
