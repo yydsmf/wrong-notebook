@@ -1457,6 +1457,42 @@ describe('structured figure specs', () => {
         expect(depthLabelY).toBeGreaterThan(300);
     });
 
+    it('renders only a foldable cube net with equal square faces', () => {
+        const spec = {
+            type: 'solid_net', shape: 'cube', title: '正方体展开图',
+            cells: [
+                { row: 0, col: 0, label: '1' }, { row: -1, col: 0, label: '2' },
+                { row: 1, col: 0, label: '3' }, { row: 0, col: -1, label: '4' },
+                { row: 0, col: 1, label: '5' }, { row: -2, col: 0, label: '6' },
+            ],
+        };
+        expect(parseFigureSpec(JSON.stringify(spec))).not.toBeNull();
+        const svg = renderFigureSpec(JSON.stringify(spec));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const cells = Array.from(document.querySelectorAll('rect[data-figure-net-cell]'));
+        expect(cells).toHaveLength(6);
+        const size = Number(cells[0]!.getAttribute('width'));
+        expect(size).toBeGreaterThanOrEqual(42);
+        expect(cells.every((cell) => Number(cell.getAttribute('width')) === size && Number(cell.getAttribute('height')) === size)).toBe(true);
+        expect(svg).not.toMatch(/NaN|Infinity|undefined/);
+    });
+
+    it('rejects disconnected, duplicated or non-foldable six-square layouts', () => {
+        expect(parseFigureSpec(JSON.stringify({
+            type: 'solid_net', shape: 'cube',
+            cells: [{ row: 0, col: 0 }, { row: 0, col: 1 }, { row: 0, col: 2 }, { row: 0, col: 3 }, { row: 0, col: 4 }, { row: 2, col: 0 }],
+        }))).toBeNull();
+        expect(parseFigureSpec(JSON.stringify({
+            type: 'solid_net', shape: 'cube',
+            cells: [{ row: 0, col: 0 }, { row: 0, col: 1 }, { row: 0, col: 1 }, { row: 0, col: 2 }, { row: 1, col: 0 }, { row: -1, col: 0 }],
+        }))).toBeNull();
+        expect(parseFigureSpec(JSON.stringify({
+            type: 'solid_net', shape: 'cube',
+            cells: [{ row: 0, col: 0 }, { row: 0, col: 1 }, { row: 0, col: 2 }, { row: 1, col: 0 }, { row: 1, col: 1 }, { row: 1, col: 2 }],
+        }))).toBeNull();
+    });
+
     it('rejects cubes whose three dimensions do not match', () => {
         expect(parseFigureSpec(JSON.stringify({
             type: 'solid_geometry',

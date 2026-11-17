@@ -250,6 +250,24 @@ const solidGeometrySchema = z.object({
     }
 });
 
+const cubeNetCellSchema = z.object({
+    row: z.number().int().min(-4).max(4),
+    col: z.number().int().min(-4).max(4),
+    label: z.string().max(20).optional(),
+});
+
+const solidNetSchema = z.object({
+    type: z.literal('solid_net'),
+    shape: z.literal('cube'),
+    cells: z.array(cubeNetCellSchema).length(6),
+    title: z.string().max(100).optional(),
+}).superRefine((value, context) => {
+    const positions = new Set(value.cells.map((cell) => `${cell.row},${cell.col}`));
+    if (positions.size !== value.cells.length) {
+        context.addIssue({ code: 'custom', message: 'Cube net cells must occupy unique positions' });
+    }
+});
+
 const geometryPointSchema = z.object({
     id: z.string().min(1).max(20),
     x: z.number().finite().min(0).max(100),
@@ -382,6 +400,7 @@ const singleFigureSchemas = [
     circleGeometrySchema,
     areaGeometrySchema,
     solidGeometrySchema,
+    solidNetSchema,
     roundSolidSchema,
     sphereGeometrySchema,
     basicGeometrySchema,
@@ -686,6 +705,12 @@ function normalizeSingleFigureSpec(spec: SingleFigureSpec): SingleFigureSpec {
                 ...(spec.heightLabel ? { heightLabel: normalizeText(spec.heightLabel) } : {}),
                 ...(spec.title ? { title: normalizeText(spec.title) } : {}),
             };
+        case 'solid_net':
+            return {
+                ...spec,
+                cells: spec.cells.map((cell) => ({ ...cell, ...(cell.label ? { label: normalizeText(cell.label) } : {}) })),
+                ...(spec.title ? { title: normalizeText(spec.title) } : {}),
+            };
         case 'round_solid':
             return {
                 ...spec,
@@ -986,6 +1011,86 @@ function hasUniqueVisiblePointNames(points: readonly { label?: string }[]): bool
     return true;
 }
 
+type CubeNetVector = { x: number; y: number; z: number };
+type CubeNetFrame = { normal: CubeNetVector; right: CubeNetVector; down: CubeNetVector };
+
+function sameCubeNetVector(first: CubeNetVector, second: CubeNetVector): boolean {
+    return first.x === second.x && first.y === second.y && first.z === second.z;
+}
+
+function crossCubeNetVector(first: CubeNetVector, second: CubeNetVector): CubeNetVector {
+    return {
+        x: first.y * second.z - first.z * second.y,
+        y: first.z * second.x - first.x * second.z,
+        z: first.x * second.y - first.y * second.x,
+    };
+}
+
+/** 绕相邻面的折痕旋转 90 度，使用整数方向向量避免浮点误差。 */
+function rotateCubeNetVector(vector: CubeNetVector, axis: CubeNetVector, direction: 1 | -1): CubeNetVector {
+    if (sameCubeNetVector(vector, axis) || sameCubeNetVector(vector, { x: -axis.x, y: -axis.y, z: -axis.z })) return vector;
+    const result = direction === 1 ? crossCubeNetVector(axis, vector) : crossCubeNetVector(vector, axis);
+    return { x: Math.round(result.x), y: Math.round(result.y), z: Math.round(result.z) };
+}
+
+function rotateCubeNetFrame(frame: CubeNetFrame, axis: CubeNetVector, direction: 1 | -1): CubeNetFrame {
+    return {
+        normal: rotateCubeNetVector(frame.normal, axis, direction),
+        right: rotateCubeNetVector(frame.right, axis, direction),
+        down: rotateCubeNetVector(frame.down, axis, direction),
+    };
+}
+
+/**
+ * 正方体展开图必须能沿方格边折叠成六个不同的面。
+ * 通过相邻方格传播三维朝向，既拒绝断开的图，也拒绝会重叠或无法折成立方体的方格布局。
+ */
+function validateCubeNetCells(cells: readonly z.infer<typeof cubeNetCellSchema>[]): boolean {
+    const byPosition = new Map(cells.map((cell) => [`${cell.row},${cell.col}`, cell]));
+    const first = cells[0];
+    if (!first || byPosition.size !== 6) return false;
+
+    const rootFrame: CubeNetFrame = {
+        normal: { x: 0, y: 0, z: 1 },
+        right: { x: 1, y: 0, z: 0 },
+        down: { x: 0, y: 1, z: 0 },
+    };
+    const frames = new Map<string, CubeNetFrame>([[`${first.row},${first.col}`, rootFrame]]);
+    const queue = [first];
+    const directions = [
+        { row: 0, col: 1, axis: 'down' as const, direction: 1 as const },
+        { row: 0, col: -1, axis: 'down' as const, direction: -1 as const },
+        { row: 1, col: 0, axis: 'right' as const, direction: -1 as const },
+        { row: -1, col: 0, axis: 'right' as const, direction: 1 as const },
+    ];
+
+    for (let index = 0; index < queue.length; index += 1) {
+        const current = queue[index]!;
+        const currentKey = `${current.row},${current.col}`;
+        const currentFrame = frames.get(currentKey)!;
+        for (const direction of directions) {
+            const neighbor = byPosition.get(`${current.row + direction.row},${current.col + direction.col}`);
+            if (!neighbor) continue;
+            const axis = currentFrame[direction.axis];
+            const nextFrame = rotateCubeNetFrame(currentFrame, axis, direction.direction);
+            const neighborKey = `${neighbor.row},${neighbor.col}`;
+            const existing = frames.get(neighborKey);
+            if (existing) {
+                if (!sameCubeNetVector(existing.normal, nextFrame.normal)
+                    || !sameCubeNetVector(existing.right, nextFrame.right)
+                    || !sameCubeNetVector(existing.down, nextFrame.down)) return false;
+                continue;
+            }
+            frames.set(neighborKey, nextFrame);
+            queue.push(neighbor);
+        }
+    }
+
+    if (frames.size !== cells.length) return false;
+    const normals = new Set([...frames.values()].map((frame) => `${frame.normal.x},${frame.normal.y},${frame.normal.z}`));
+    return normals.size === 6 && [...frames.values()].every(({ normal }) => Math.abs(normal.x) + Math.abs(normal.y) + Math.abs(normal.z) === 1);
+}
+
 function validArithmeticToken(value: string): boolean {
     return validDisplayText(value, 18) && /^[0-9a-zA-Z?？_＿□﹖+\-−×xX*/÷=.,，。()（）\s]+$/u.test(value);
 }
@@ -1240,6 +1345,10 @@ function validateFigureSpec(spec: FigureSpec): boolean {
                 && (!spec.depthLabel || validDisplayText(spec.depthLabel, 30))
                 && (!spec.heightLabel || validDisplayText(spec.heightLabel, 30))
                 && validateFigureLengths([{ label: spec.widthLabel }, { label: spec.depthLabel }, { label: spec.heightLabel }], spec.shape === 'cube')
+                && (!spec.title || validDisplayText(spec.title, 60));
+        case 'solid_net':
+            return validateCubeNetCells(spec.cells)
+                && spec.cells.every((cell) => !cell.label || validDisplayText(cell.label, 20))
                 && (!spec.title || validDisplayText(spec.title, 60));
         case 'round_solid':
             return [spec.radiusLabel, spec.diameterLabel, spec.heightLabel, spec.slantLabel].every((label) => !label || validDisplayText(label, 30))
@@ -1967,6 +2076,46 @@ function renderSolidGeometry(spec: z.infer<typeof solidGeometrySchema>): FigureD
     if (!renderedLabels) return null;
     content.push(renderedLabels.svg);
     return root(content.join(''), 500, renderedLabels.viewport);
+}
+
+function renderSolidNet(spec: z.infer<typeof solidNetSchema>): FigureDrawing | null {
+    if (!validateCubeNetCells(spec.cells)) return null;
+    const minRow = Math.min(...spec.cells.map((cell) => cell.row));
+    const maxRow = Math.max(...spec.cells.map((cell) => cell.row));
+    const minCol = Math.min(...spec.cells.map((cell) => cell.col));
+    const maxCol = Math.max(...spec.cells.map((cell) => cell.col));
+    const rows = maxRow - minRow + 1;
+    const cols = maxCol - minCol + 1;
+    const titleSize = spec.title ? fitFontSize(spec.title, 22, 700) : 22;
+    if (titleSize < 12) return null;
+
+    const cell = Math.floor(Math.min(96, 650 / cols, 420 / rows));
+    if (cell < 42) return null;
+    const width = cols * cell;
+    const height = rows * cell;
+    const top = spec.title ? 92 : 62;
+    const bottom = top + height;
+    const figureHeight = Math.ceil(Math.max(500, bottom + 34));
+    if (figureHeight > 800) return null;
+
+    const content: string[] = [];
+    if (spec.title) content.push(text(400, 35, spec.title, { size: titleSize, maxWidth: 700, title: true }));
+    const byPosition = new Map(spec.cells.map((cellInfo) => [`${cellInfo.row},${cellInfo.col}`, cellInfo]));
+    for (const row of Array.from({ length: rows }, (_, index) => minRow + index)) {
+        for (const col of Array.from({ length: cols }, (_, index) => minCol + index)) {
+            const cellInfo = byPosition.get(`${row},${col}`);
+            if (!cellInfo) continue;
+            const x = 400 - width / 2 + (col - minCol) * cell;
+            const y = top + (row - minRow) * cell;
+            content.push(`<rect data-figure-net-cell="${row},${col}" x="${finite(x)}" y="${finite(y)}" width="${finite(cell)}" height="${finite(cell)}" fill="${COLORS.lightBlue}" stroke="${COLORS.black}" stroke-width="2"/>`);
+            if (cellInfo.label) {
+                const size = fitFontSize(cellInfo.label, 20, cell * 0.78);
+                if (size < 12) return null;
+                content.push(text(x + cell / 2, y + cell / 2 + size * 0.35, cellInfo.label, { size, maxWidth: cell * 0.78 }));
+            }
+        }
+    }
+    return root(content.join(''), figureHeight);
 }
 
 function renderRoundSolid(spec: RoundSolidSpec): FigureDrawing | null {
@@ -3016,6 +3165,7 @@ function renderParsedFigureSpec(spec: SingleFigureSpec): FigureDrawing | null {
         case 'circle_geometry': return renderCircleGeometry(spec);
         case 'area_geometry': return renderAreaGeometry(spec);
         case 'solid_geometry': return renderSolidGeometry(spec);
+        case 'solid_net': return renderSolidNet(spec);
         case 'round_solid': return renderRoundSolid(spec);
         case 'sphere_geometry': return renderSphere(spec);
         case 'basic_geometry': return renderGeometry(spec);

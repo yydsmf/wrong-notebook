@@ -128,6 +128,19 @@ describe('AI Prompts', () => {
             }
         });
 
+        it.each(['zh', 'en'] as const)('重绘和相似题共用正方体展开图的折叠校验和回退约束（%s）', (language) => {
+            for (const prompt of [
+                generateFigurePrompt('下图是一个正方体展开图。'),
+                generateSimilarQuestionPrompt(language, '下图是一个正方体展开图。', ['立体图形'], 'medium'),
+            ]) {
+                expect(prompt).toContain('solid_net');
+                expect(prompt).toContain('六个同样大小的正方形');
+                expect(prompt).toContain('确实能折成立方体');
+                expect(prompt).toContain('长方体展开图、组合体展开图');
+                expect(prompt).toContain('缺格、重复、断开');
+            }
+        });
+
         it('重绘和新题配图共用圆的明确长度约束，不推断缺失单位', () => {
             const prompts = [
                 generateFigurePrompt('如图，半径为3cm，弦AC长4cm'),

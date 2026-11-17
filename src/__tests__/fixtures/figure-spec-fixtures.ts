@@ -268,6 +268,21 @@ export const STRUCTURED_FIGURE_FIXTURES: FigureSpecFixture[] = [
         elementMinimums: { polygon: 3, line: 3 },
     },
     {
+        id: 'primary-cube-net-cross',
+        stage: '小学',
+        type: 'solid_net',
+        spec: {
+            type: 'solid_net', shape: 'cube', title: '正方体展开图',
+            cells: [
+                { row: 0, col: 0, label: '1' }, { row: -1, col: 0, label: '2' },
+                { row: 1, col: 0, label: '3' }, { row: 0, col: -1, label: '4' },
+                { row: 0, col: 1, label: '5' }, { row: -2, col: 0, label: '6' },
+            ],
+        },
+        mustContain: ['data-figure-net-cell="0,0"', '>1</text>', '>6</text>', '>正方体展开图</text>'],
+        elementMinimums: { rect: 7, text: 7 },
+    },
+    {
         id: 'primary-bar-chart',
         stage: '小学',
         type: 'bar_chart',
