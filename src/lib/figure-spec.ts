@@ -250,6 +250,31 @@ const solidGeometrySchema = z.object({
     }
 });
 
+const stackedSolidPartSchema = z.object({
+    width: z.number().finite().positive().max(100),
+    depth: z.number().finite().positive().max(100),
+    height: z.number().finite().positive().max(100),
+    widthLabel: z.string().max(40).optional(),
+    depthLabel: z.string().max(40).optional(),
+    heightLabel: z.string().max(40).optional(),
+});
+
+const stackedSolidSchema = z.object({
+    type: z.literal('stacked_solid'),
+    base: stackedSolidPartSchema,
+    top: stackedSolidPartSchema,
+    title: z.string().max(100).optional(),
+    fill: z.enum(['none', 'gray', 'lightblue']).default('lightblue'),
+}).superRefine((value, context) => {
+    // 顶物体只能完整落在底物体的上表面，避免把任意组合体误画成规则叠放体。
+    if (value.top.width > value.base.width) {
+        context.addIssue({ code: 'custom', message: 'Stacked top width cannot exceed base width' });
+    }
+    if (value.top.depth > value.base.depth) {
+        context.addIssue({ code: 'custom', message: 'Stacked top depth cannot exceed base depth' });
+    }
+});
+
 const cubeNetCellSchema = z.object({
     row: z.number().int().min(-4).max(4),
     col: z.number().int().min(-4).max(4),
@@ -400,6 +425,7 @@ const singleFigureSchemas = [
     circleGeometrySchema,
     areaGeometrySchema,
     solidGeometrySchema,
+    stackedSolidSchema,
     solidNetSchema,
     roundSolidSchema,
     sphereGeometrySchema,
@@ -463,6 +489,15 @@ function normalizeText(value: string): string {
     return value.normalize('NFC')
         .replace(/[\uff01-\uff5e]/g, (character) => String.fromCharCode(character.charCodeAt(0) - 0xfee0))
         .trim().replace(/\s+/g, ' ');
+}
+
+function normalizeStackedSolidPart(part: z.infer<typeof stackedSolidPartSchema>): z.infer<typeof stackedSolidPartSchema> {
+    return {
+        ...part,
+        ...(part.widthLabel ? { widthLabel: normalizeText(part.widthLabel) } : {}),
+        ...(part.depthLabel ? { depthLabel: normalizeText(part.depthLabel) } : {}),
+        ...(part.heightLabel ? { heightLabel: normalizeText(part.heightLabel) } : {}),
+    };
 }
 
 function stripArithmeticSign(value: string): string {
@@ -703,6 +738,13 @@ function normalizeSingleFigureSpec(spec: SingleFigureSpec): SingleFigureSpec {
                 ...(spec.widthLabel ? { widthLabel: normalizeText(spec.widthLabel) } : {}),
                 ...(spec.depthLabel ? { depthLabel: normalizeText(spec.depthLabel) } : {}),
                 ...(spec.heightLabel ? { heightLabel: normalizeText(spec.heightLabel) } : {}),
+                ...(spec.title ? { title: normalizeText(spec.title) } : {}),
+            };
+        case 'stacked_solid':
+            return {
+                ...spec,
+                base: normalizeStackedSolidPart(spec.base),
+                top: normalizeStackedSolidPart(spec.top),
                 ...(spec.title ? { title: normalizeText(spec.title) } : {}),
             };
         case 'solid_net':
@@ -1346,6 +1388,12 @@ function validateFigureSpec(spec: FigureSpec): boolean {
                 && (!spec.heightLabel || validDisplayText(spec.heightLabel, 30))
                 && validateFigureLengths([{ label: spec.widthLabel }, { label: spec.depthLabel }, { label: spec.heightLabel }], spec.shape === 'cube')
                 && (!spec.title || validDisplayText(spec.title, 60));
+        case 'stacked_solid': {
+            const validPart = (part: z.infer<typeof stackedSolidPartSchema>) => [part.widthLabel, part.depthLabel, part.heightLabel].every((label) =>
+                !label || validDisplayText(label, 30))
+                && validateFigureLengths([{ label: part.widthLabel }, { label: part.depthLabel }, { label: part.heightLabel }]);
+            return validPart(spec.base) && validPart(spec.top) && (!spec.title || validDisplayText(spec.title, 60));
+        }
         case 'solid_net':
             return validateCubeNetCells(spec.cells)
                 && spec.cells.every((cell) => !cell.label || validDisplayText(cell.label, 20))
@@ -2071,6 +2119,134 @@ function renderSolidGeometry(spec: z.infer<typeof solidGeometrySchema>): FigureD
     if (spec.widthLabel) labels.segmentLabel(frontBottomLeft, frontBottomRight, spec.widthLabel, { size: 18, maxWidth: 150 }, { x: 0, y: 1 });
     if (spec.heightLabel) labels.segmentLabel(frontTopLeft, frontBottomLeft, spec.heightLabel, { size: 18, maxWidth: 110 }, { x: -1, y: 0 });
     if (spec.depthLabel) labels.segmentLabel(frontBottomRight, backBottomRight, spec.depthLabel, { size: 18, maxWidth: 130 }, { x: 1, y: 1 });
+    if (spec.title) labels.title(spec.title);
+    const renderedLabels = labels.renderLabels([], { size: 18, maxWidth: 150, radius: 0 });
+    if (!renderedLabels) return null;
+    content.push(renderedLabels.svg);
+    return root(content.join(''), 500, renderedLabels.viewport);
+}
+
+interface SolidBoxProjection {
+    frontBottomLeft: SolidGeometryPoint;
+    frontBottomRight: SolidGeometryPoint;
+    frontTopLeft: SolidGeometryPoint;
+    frontTopRight: SolidGeometryPoint;
+    backBottomLeft: SolidGeometryPoint;
+    backBottomRight: SolidGeometryPoint;
+    backTopLeft: SolidGeometryPoint;
+    backTopRight: SolidGeometryPoint;
+}
+
+function projectSolidBox(
+    width: number,
+    depth: number,
+    height: number,
+    scale: number,
+    origin: SolidGeometryPoint,
+): SolidBoxProjection {
+    const projectedWidth = width * scale;
+    const depthX = depth * scale * 0.56;
+    const depthY = depth * scale * 0.32;
+    const projectedHeight = height * scale;
+    const frontBottomLeft = origin;
+    const frontBottomRight = { x: origin.x + projectedWidth, y: origin.y };
+    const frontTopLeft = { x: origin.x, y: origin.y - projectedHeight };
+    const frontTopRight = { x: origin.x + projectedWidth, y: origin.y - projectedHeight };
+    const backBottomLeft = { x: origin.x + depthX, y: origin.y - depthY };
+    const backBottomRight = { x: origin.x + projectedWidth + depthX, y: origin.y - depthY };
+    const backTopLeft = { x: origin.x + depthX, y: origin.y - depthY - projectedHeight };
+    const backTopRight = { x: origin.x + projectedWidth + depthX, y: origin.y - depthY - projectedHeight };
+    return {
+        frontBottomLeft, frontBottomRight, frontTopLeft, frontTopRight,
+        backBottomLeft, backBottomRight, backTopLeft, backTopRight,
+    };
+}
+
+function renderStackedSolid(spec: z.infer<typeof stackedSolidSchema>): FigureDrawing | null {
+    const totalHeight = spec.base.height + spec.top.height;
+    const maximumPlanDimension = Math.max(spec.base.width, spec.base.depth, spec.top.width, spec.top.depth);
+    const scale = Math.min(190 / maximumPlanDimension, 250 / totalHeight);
+    if (!Number.isFinite(scale) || scale <= 0) return null;
+
+    const baseWidth = spec.base.width * scale;
+    const baseDepthX = spec.base.depth * scale * 0.56;
+    const baseDepthY = spec.base.depth * scale * 0.32;
+    const baseOrigin: SolidGeometryPoint = {
+        x: 400 - (baseWidth + baseDepthX) / 2,
+        y: 395 + baseDepthY / 2,
+    };
+    const base = projectSolidBox(spec.base.width, spec.base.depth, spec.base.height, scale, baseOrigin);
+    const topWidth = spec.top.width * scale;
+    const topDepthX = spec.top.depth * scale * 0.56;
+    const topOrigin: SolidGeometryPoint = {
+        x: 400 - (topWidth + topDepthX) / 2,
+        y: base.frontTopLeft.y,
+    };
+    const top = projectSolidBox(spec.top.width, spec.top.depth, spec.top.height, scale, topOrigin);
+    const allPoints = Object.values(base).concat(Object.values(top));
+    if (allPoints.some((point) => point.x < 30 || point.x > 770 || point.y < 30 || point.y > 470)) return null;
+
+    const pointList = (points: SolidGeometryPoint[]) => points.map((point) => `${finite(point.x)},${finite(point.y)}`).join(' ');
+    const labels = createGeometryLabelLayout(12);
+    const content: string[] = [];
+    const baseFill = spec.fill === 'gray' ? COLORS.gray : spec.fill === 'lightblue' ? COLORS.lightBlue : '#fff';
+    const sideFill = spec.fill === 'gray' ? '#d1d5db' : spec.fill === 'lightblue' ? '#bfdbfe' : '#f3f4f6';
+    const topFill = spec.fill === 'gray' ? '#f3f4f6' : spec.fill === 'lightblue' ? '#eff6ff' : '#fff';
+
+    const drawBox = (box: SolidBoxProjection, part: 'base' | 'top') => {
+        const boxContent: string[] = [];
+        boxContent.push(`<polygon points="${pointList([box.frontTopLeft, box.frontTopRight, box.frontBottomRight, box.frontBottomLeft])}" fill="${baseFill}" stroke="${COLORS.black}" stroke-width="2"/>`);
+        boxContent.push(`<polygon points="${pointList([box.frontTopRight, box.backTopRight, box.backBottomRight, box.frontBottomRight])}" fill="${sideFill}" stroke="${COLORS.black}" stroke-width="2"/>`);
+        boxContent.push(`<polygon points="${pointList([box.frontTopLeft, box.backTopLeft, box.backTopRight, box.frontTopRight])}" fill="${topFill}" stroke="${COLORS.black}" stroke-width="2"/>`);
+        const visibleEdges: Array<[SolidGeometryPoint, SolidGeometryPoint]> = [
+            [box.frontBottomLeft, box.frontBottomRight], [box.frontBottomRight, box.frontTopRight],
+            [box.frontTopRight, box.frontTopLeft], [box.frontTopLeft, box.frontBottomLeft],
+            [box.frontTopLeft, box.backTopLeft], [box.backTopLeft, box.backTopRight],
+            [box.backTopRight, box.frontTopRight], [box.backTopRight, box.backBottomRight],
+            [box.backBottomRight, box.frontBottomRight],
+        ];
+        for (const [from, to] of visibleEdges) boxContent.push(labels.line(from.x, from.y, to.x, to.y));
+        boxContent.push(labels.line(box.backBottomLeft.x, box.backBottomLeft.y, box.backBottomRight.x, box.backBottomRight.y, { dashed: true, width: 1.8 }));
+        boxContent.push(labels.line(box.frontBottomLeft.x, box.frontBottomLeft.y, box.backBottomLeft.x, box.backBottomLeft.y, { dashed: true, width: 1.8 }));
+        boxContent.push(labels.line(box.backBottomLeft.x, box.backBottomLeft.y, box.backTopLeft.x, box.backTopLeft.y, { dashed: true, width: 1.8 }));
+        content.push(`<g data-stacked-solid-part="${part}">${boxContent.join('')}</g>`);
+    };
+
+    // 先画底物体，再画顶物体，顶物体始终落在底物体的上表面并覆盖其内部遮挡线。
+    drawBox(base, 'base');
+    drawBox(top, 'top');
+    const addLabels = (
+        box: SolidBoxProjection,
+        part: z.infer<typeof stackedSolidPartSchema>,
+        topPart: boolean,
+    ) => {
+        if (part.widthLabel) {
+            if (topPart) {
+                const x = (box.frontTopLeft.x + box.frontTopRight.x) / 2;
+                // 顶物体的正面空间比外侧更稳定，避免文字撞到底物体的顶面棱线。
+                content.push(labels.text(x, box.frontBottomLeft.y + 28, part.widthLabel, { size: 18, maxWidth: 150 }));
+            } else {
+                labels.segmentLabel(box.frontBottomLeft, box.frontBottomRight, part.widthLabel, { size: 18, maxWidth: 150 }, { x: 0, y: 1 });
+            }
+        }
+        if (part.heightLabel) {
+            if (topPart) {
+                const x = Math.max(box.backBottomRight.x, base.backBottomRight.x) + 14;
+                content.push(labels.text(x, (box.frontTopLeft.y + box.frontBottomLeft.y) / 2 + 6, part.heightLabel, { size: 18, maxWidth: 110, anchor: 'start' }));
+            } else {
+                labels.segmentLabel(box.frontTopLeft, box.frontBottomLeft, part.heightLabel, { size: 18, maxWidth: 110 }, { x: -1, y: 0 });
+            }
+        }
+        if (part.depthLabel) {
+            if (topPart) {
+                content.push(labels.text(box.backTopRight.x + 22, box.backTopRight.y - 8, part.depthLabel, { size: 18, maxWidth: 130, anchor: 'start' }));
+            } else {
+                labels.segmentLabel(box.frontBottomRight, box.backBottomRight, part.depthLabel, { size: 18, maxWidth: 130 }, { x: 1, y: 1 });
+            }
+        }
+    };
+    addLabels(base, spec.base, false);
+    addLabels(top, spec.top, true);
     if (spec.title) labels.title(spec.title);
     const renderedLabels = labels.renderLabels([], { size: 18, maxWidth: 150, radius: 0 });
     if (!renderedLabels) return null;
@@ -3165,6 +3341,7 @@ function renderParsedFigureSpec(spec: SingleFigureSpec): FigureDrawing | null {
         case 'circle_geometry': return renderCircleGeometry(spec);
         case 'area_geometry': return renderAreaGeometry(spec);
         case 'solid_geometry': return renderSolidGeometry(spec);
+        case 'stacked_solid': return renderStackedSolid(spec);
         case 'solid_net': return renderSolidNet(spec);
         case 'round_solid': return renderRoundSolid(spec);
         case 'sphere_geometry': return renderSphere(spec);

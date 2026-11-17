@@ -1457,6 +1457,36 @@ describe('structured figure specs', () => {
         expect(depthLabelY).toBeGreaterThan(300);
     });
 
+    it('renders only two centered stacked cuboids with stable part groups', () => {
+        const spec = {
+            type: 'stacked_solid',
+            base: { width: 8, depth: 6, height: 4, widthLabel: '底长8', depthLabel: '底宽6', heightLabel: '底高4' },
+            top: { width: 4, depth: 3, height: 3, widthLabel: '上长4', depthLabel: '上宽3', heightLabel: '上高3' },
+            title: '两个长方体上下叠放',
+        };
+        expect(parseFigureSpec(JSON.stringify(spec))).not.toBeNull();
+        const svg = renderFigureSpec(JSON.stringify(spec));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        expect(document.querySelectorAll('g[data-stacked-solid-part]')).toHaveLength(2);
+        expect(document.querySelectorAll('g[data-stacked-solid-part="base"] polygon')).toHaveLength(3);
+        expect(document.querySelectorAll('g[data-stacked-solid-part="top"] polygon')).toHaveLength(3);
+        for (const label of ['底长8', '底宽6', '底高4', '上长4', '上宽3', '上高3']) {
+            expect(svg).toContain(`>${label}</text>`);
+        }
+        expect(svg).toContain('>两个长方体上下叠放</text>');
+        expect(svg).toMatch(/stroke-dasharray="7 5"/);
+        expect(svg).not.toMatch(/NaN|Infinity|undefined/);
+    });
+
+    it('rejects stacked solids whose top overhangs the base', () => {
+        expect(parseFigureSpec(JSON.stringify({
+            type: 'stacked_solid',
+            base: { width: 4, depth: 4, height: 4 },
+            top: { width: 5, depth: 3, height: 2 },
+        }))).toBeNull();
+    });
+
     it('renders only a foldable cube net with equal square faces', () => {
         const spec = {
             type: 'solid_net', shape: 'cube', title: '正方体展开图',

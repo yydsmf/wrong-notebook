@@ -119,6 +119,18 @@ describe('AI Prompts', () => {
             }
         });
 
+        it.each(['zh', 'en'] as const)('重绘和相似题共用上下叠放长方体模板边界（%s）', (language) => {
+            for (const prompt of [
+                generateFigurePrompt('下图是两个长方体上下叠放。'),
+                generateSimilarQuestionPrompt(language, '下图是两个长方体上下叠放。', ['立体图形'], 'medium'),
+            ]) {
+                expect(prompt).toContain('stacked_solid');
+                expect(prompt).toContain('两个规则长方体上下居中叠放');
+                expect(prompt).toContain('top 的 width 和 depth 必须不大于 base');
+                expect(prompt).toContain('不支持悬空、错位、挖去一部分、左右拼接');
+            }
+        });
+
         it.each(['zh', 'en'] as const)('重绘和相似题共用完整球体模板，不补未知量（%s）', (language) => {
             for (const prompt of [generateFigurePrompt('下图是一个球体。'), generateSimilarQuestionPrompt(language, '下图是一个球体。', ['立体图形'], 'medium')]) {
                 expect(prompt).toContain('sphere_geometry：{type,radius,radiusLabel?,diameterLabel?,title?,fill?}');

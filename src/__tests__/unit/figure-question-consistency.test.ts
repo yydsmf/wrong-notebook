@@ -13,6 +13,9 @@ const area = (shape: 'triangle' | 'rectangle' | 'square' | 'parallelogram' | 'tr
 const solid = (shape: 'cube' | 'cuboid') => ({
     type: 'solid_geometry', shape, width: 4, depth: 4, height: 4,
 });
+const stackedSolid = (base = { width: 8, depth: 6, height: 4 }, top = { width: 4, depth: 3, height: 3 }) => ({
+    type: 'stacked_solid', base, top,
+});
 const cubeNet = {
     type: 'solid_net', shape: 'cube',
     cells: [
@@ -121,6 +124,13 @@ describe('题干与结构化配图的一致性', () => {
         ['英文正方体主图却使用不等长棱', { ...solid('cuboid'), depth: 3, height: 2 }, 'The solid is a cube with an edge of 4 cm.'],
     ])('%s 时拒绝冲突结构', (_name, spec, question) => {
         expect(parseFigure('true', null, raw(spec), question)).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('只接受与题干一致的上下叠放立体', () => {
+        expect(parseFigure('true', null, raw(stackedSolid()), '下图是两个长方体上下叠放。').figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(stackedSolid()), '下图是一个球体。')).toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(stackedSolid({ width: 4, depth: 4, height: 4 }, { width: 3, depth: 3, height: 2 })), '下图是一个正方体，两个物体上下叠放。')).toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(stackedSolid({ width: 4, depth: 4, height: 4 }, { width: 3, depth: 3, height: 3 })), '下图是一个正方体，两个物体上下叠放。').figureSvg).not.toBeNull();
     });
 
     it('唯一形状与题干一致时保留，题干同时讨论多种形状时不猜测', () => {

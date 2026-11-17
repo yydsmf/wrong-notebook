@@ -242,6 +242,19 @@ function matchesSolidShape(spec: Extract<FigureSpec, { type: 'solid_geometry' }>
         && validateFigureLengths([{ label: spec.widthLabel }, { label: spec.depthLabel }, { label: spec.heightLabel }], true);
 }
 
+function matchesStackedSolidShape(spec: Extract<FigureSpec, { type: 'stacked_solid' }>, expected: ExplicitQuestionShape): boolean {
+    if (expected === 'cuboid') return true;
+    if (expected !== 'cube') return false;
+    const isCube = (part: typeof spec.base) => {
+        const maximum = Math.max(part.width, part.depth, part.height);
+        const tolerance = Math.max(0.01, maximum * 0.02);
+        return Math.abs(part.width - part.depth) <= tolerance
+            && Math.abs(part.width - part.height) <= tolerance
+            && validateFigureLengths([{ label: part.widthLabel }, { label: part.depthLabel }, { label: part.heightLabel }], true);
+    };
+    return isCube(spec.base) && isCube(spec.top);
+}
+
 function matchesArithmeticConstraint(
     figure: Extract<FigureSpec, { type: 'vertical_arithmetic' }>,
     constraint: FigureArithmeticConstraint,
@@ -335,6 +348,9 @@ function validateSingleFigureQuestionConsistency(
     if (questionShape && spec.type === 'solid_geometry') {
         return matchesSolidShape(spec, questionShape.shape)
             && validateFigureTemplateDimensions(spec, questionShape.shape, questionShape.dimensionText);
+    }
+    if (questionShape && spec.type === 'stacked_solid') {
+        return matchesStackedSolidShape(spec, questionShape.shape);
     }
     if (questionShape && spec.type === 'round_solid') {
         return questionShape.shape === spec.shape
