@@ -12,8 +12,17 @@ const viewBox = (element: Element) => {
     return values.length === 4 && values.every(Number.isFinite) && values[2] > 0 && values[3] > 0 ? values : null;
 };
 
-/** 只测量显式字号与等比例子画布，不把不明样式或变换的旧 SVG 当作可可靠测量的图。 */
-export function getFigureReadingSize(markup: string, width: number, height: number): FigureReadingSize | null {
+/**
+ * 测量显式字号与等比例子画布；传入当前显示尺寸后，同时补偿手机窄屏或高度上限造成的整体缩小。
+ * 不把不明样式或变换的旧 SVG 当作可可靠测量的图。
+ */
+export function getFigureReadingSize(
+    markup: string,
+    width: number,
+    height: number,
+    displayedWidth = width,
+    displayedHeight = height,
+): FigureReadingSize | null {
     if (typeof DOMParser === 'undefined' || markup.length > MAX_FIGURE_SVG_LENGTH
         || ![width, height].every((value) => Number.isFinite(value) && value > 0)) return null;
     const document = new DOMParser().parseFromString(markup, 'image/svg+xml');
@@ -40,7 +49,11 @@ export function getFigureReadingSize(markup: string, width: number, height: numb
         return Array.from(element.children).every((child) => measure(child, scale));
     };
     if (!measure(root, 1) || !Number.isFinite(minimumFontSize)) return null;
-    const scale = Math.max(1, 12 / minimumFontSize);
+    // 隐藏容器或尚未完成布局时没有可用的显示尺寸，先按原始尺寸保持文字可读。
+    const renderedScale = [displayedWidth, displayedHeight].every((value) => Number.isFinite(value) && value > 0)
+        ? Math.min(1, displayedWidth / width, displayedHeight / height)
+        : 1;
+    const scale = Math.max(1, 12 / (minimumFontSize * renderedScale));
     if (scale > 4 || width * scale > 2400 || height * scale > 4800) return null;
     return { width: width * scale, height: height * scale, minimumFontSize: minimumFontSize * scale };
 }

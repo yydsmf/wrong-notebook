@@ -13,6 +13,33 @@ const area = (shape: 'triangle' | 'rectangle' | 'square' | 'parallelogram' | 'tr
 const solid = (shape: 'cube' | 'cuboid') => ({
     type: 'solid_geometry', shape, width: 4, depth: 4, height: 4,
 });
+const labelledGeometry = (labels: string[], segmentLabels: Array<[string, string]> = []) => ({
+    type: 'basic_geometry',
+    points: labels.map((label, index) => ({ id: `${label}-${index}`, x: 20 + index * 20, y: index % 2 ? 20 : 80, label })),
+    segments: segmentLabels.map(([from, to]) => ({
+        from: `${from}-${labels.indexOf(from)}`,
+        to: `${to}-${labels.indexOf(to)}`,
+    })),
+});
+const namedTriangle = (apexX: number) => ({
+    type: 'basic_geometry',
+    points: [
+        { id: 'A', x: 20, y: 80, label: 'A' },
+        { id: 'B', x: 80, y: 80, label: 'B' },
+        { id: 'C', x: apexX, y: 20, label: 'C' },
+    ],
+    polygons: [{ points: ['A', 'B', 'C'] }],
+});
+const namedSquare = (bottomY = 80) => ({
+    type: 'basic_geometry',
+    points: [
+        { id: 'A', x: 20, y: 20, label: 'A' },
+        { id: 'B', x: 80, y: 20, label: 'B' },
+        { id: 'C', x: 80, y: bottomY, label: 'C' },
+        { id: 'D', x: 20, y: bottomY, label: 'D' },
+    ],
+    polygons: [{ points: ['A', 'B', 'C', 'D'] }],
+});
 
 describe('题干与结构化配图的一致性', () => {
     it('两位数乘25只约束明确的乘数和位数', () => {
@@ -27,6 +54,13 @@ describe('题干与结构化配图的一致性', () => {
         expect(parseFigure('true', null, raw(arithmetic('34', '25')), question).figureSvg).not.toBeNull();
         expect(parseFigure('true', null, raw(arithmetic('43', '25')), question)).toEqual({ hasFigure: true, figureSvg: null });
         expect(parseFigure('true', null, raw(arithmetic('34', '24')), question)).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('题干明确写出除法算式时核对除数和运算符', () => {
+        const question = '请列竖式计算 847 ÷ 7。';
+        expect(parseFigure('true', null, raw(arithmetic('847', '7', '÷')), question).figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(arithmetic('847', '8', '÷')), question)).toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(arithmetic('847', '7', '×')), question)).toEqual({ hasFigure: true, figureSvg: null });
     });
 
     it('中文算式、混合单位空格和算式前题号均可核对', () => {
@@ -101,6 +135,176 @@ describe('题干与结构化配图的一致性', () => {
         expect(parseFigure('true', null, raw(group), '比较正方形和三角形的面积。').figureSvg).not.toBeNull();
     });
 
+    it('明确按选项标签分段时校验每张子图的具名线段归属', () => {
+        const question = 'A. 连接AB；B. 连接CD。';
+        const valid = {
+            type: 'figure_group',
+            figures: [
+                { label: 'A', figure: labelledGeometry(['A', 'B'], [['A', 'B']]) },
+                { label: 'B', figure: labelledGeometry(['C', 'D'], [['C', 'D']]) },
+            ],
+        };
+        expect(parseFigure('true', null, raw(valid), question).figureSvg).not.toBeNull();
+
+        const missingLine = {
+            ...valid,
+            figures: [
+                { label: 'A', figure: labelledGeometry(['A', 'B']) },
+                valid.figures[1],
+            ],
+        };
+        expect(parseFigure('true', null, raw(missingLine), question)).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('兼容图A中、选项B和括号选项等常见分段写法', () => {
+        const group = {
+            type: 'figure_group',
+            figures: [
+                { label: 'A', figure: labelledGeometry(['A', 'B'], [['A', 'B']]) },
+                { label: 'B', figure: labelledGeometry(['C', 'D'], [['C', 'D']]) },
+            ],
+        };
+        for (const question of ['图A中：连接AB；图B中：连接CD。', '选项A：连接AB；选项B：连接CD。', '(A) 连接AB；(B) 连接CD。']) {
+            expect(parseFigure('true', null, raw(group), question).figureSvg).not.toBeNull();
+        }
+        const mismatch = { ...group, figures: [{ label: 'A', figure: labelledGeometry(['A', 'B']) }, group.figures[1]] };
+        expect(parseFigure('true', null, raw(mismatch), '选项A：连接AB；选项B：连接CD。')).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('选项内所有具名点都缺失时也回退，未明确归属的图组仍保守通过', () => {
+        const group = {
+            type: 'figure_group',
+            figures: [
+                { label: 'A', figure: labelledGeometry(['X', 'Y'], [['X', 'Y']]) },
+                { label: 'B', figure: labelledGeometry(['C', 'D'], [['C', 'D']]) },
+            ],
+        };
+        expect(parseFigure('true', null, raw(group), 'A. 连接AB；B. 连接CD。')).toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(group), '比较图A和图B中的线段长度。').figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(group), '判断正误：A中的AB是线段；B中的CD是线段。').figureSvg).not.toBeNull();
+    });
+
+    it('明确标记的选项形状分别校验，不把多个形状词套到所有子图', () => {
+        const group = {
+            type: 'figure_group',
+            figures: [
+                { label: '甲', figure: area('square') },
+                { label: '乙', figure: area('triangle') },
+            ],
+        };
+        expect(parseFigure('true', null, raw(group), '甲. 下图是正方形；乙. 下图是三角形。').figureSvg).not.toBeNull();
+        const mismatch = { ...group, figures: [{ label: '甲', figure: area('rectangle') }, group.figures[1]] };
+        expect(parseFigure('true', null, raw(mismatch), '甲. 下图是正方形；乙. 下图是三角形。')).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('逐选项校验圆图和竖式条件，点名或算式必须属于对应子图', () => {
+        const circle = (pointNames: string[], radii: string[] = []) => ({
+            type: 'circle_geometry',
+            center: { id: 'O', x: 50, y: 50, label: 'O' },
+            radius: 30,
+            points: pointNames.map((label, index) => ({
+                id: label, label, x: index === 0 ? 80 : 50, y: index === 0 ? 50 : 20,
+            })),
+            radii: radii.map((to) => ({ to })),
+            chords: [{ from: pointNames[0]!, to: pointNames[1]! }],
+        });
+        const circleGroup = {
+            type: 'figure_group',
+            figures: [
+                { label: '甲', figure: circle(['A', 'B'], ['A']) },
+                { label: '乙', figure: circle(['C', 'D']) },
+            ],
+        };
+        expect(parseFigure('true', null, raw(circleGroup), '图甲中：半径OA；图乙中：弦CD。').figureSvg).not.toBeNull();
+        const missingRadius = { ...circleGroup, figures: [{ label: '甲', figure: circle(['A', 'B']) }, circleGroup.figures[1]] };
+        expect(parseFigure('true', null, raw(missingRadius), '图甲中：半径OA；图乙中：弦CD。')).toEqual({ hasFigure: true, figureSvg: null });
+
+        const arithmeticGroup = {
+            type: 'figure_group',
+            figures: [
+                { label: '甲', figure: arithmetic('34', '25') },
+                { label: '乙', figure: arithmetic('43', '25') },
+            ],
+        };
+        expect(parseFigure('true', null, raw(arithmeticGroup), '甲. 竖式计算34×25；乙. 竖式计算43×25。').figureSvg).not.toBeNull();
+        const wrongOperand = { ...arithmeticGroup, figures: [{ label: '甲', figure: arithmetic('43', '25') }, arithmeticGroup.figures[1]] };
+        expect(parseFigure('true', null, raw(wrongOperand), '甲. 竖式计算34×25；乙. 竖式计算43×25。')).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    describe('图组子句的分段边界', () => {
+        const valid = {
+            type: 'figure_group',
+            figures: [
+                { label: 'A', figure: labelledGeometry(['A', 'B'], [['A', 'B']]) },
+                { label: 'B', figure: labelledGeometry(['C', 'D'], [['C', 'D']]) },
+            ],
+        };
+        const missingLine = {
+            ...valid,
+            figures: [{ label: 'A', figure: labelledGeometry(['A', 'B']) }, valid.figures[1]],
+        };
+
+        it.each([
+            '图A中连接AB；图B中连接CD。',
+            '(A)连接AB；(B)连接CD。',
+            '（Ａ）连接AB\n（Ｂ）连接CD。',
+            'Figure A: 连接AB; Figure B: 连接CD.',
+            'Option A: 连接AB; Option B: 连接CD.',
+            'B. 连接CD；A. 连接AB。',
+        ])('明确分段同时验证正确接受和漏线拒绝：%s', (question) => {
+            expect(parseFigure('true', null, raw(valid), question).figureSvg).not.toBeNull();
+            expect(parseFigure('true', null, raw(missingLine), question)).toEqual({ hasFigure: true, figureSvg: null });
+        });
+
+        it.each([
+            '比较图A和图B中的线段长度。',
+            'A. 连接AB。',
+            'A. 连接AB；A. 连接AB；B. 连接CD。',
+            'A. 连接AB；B.',
+            '下列哪项正确？A. 连接AB；B. 连接CD。',
+            '判断正误。A. 连接AB；B. 连接CD。',
+            'Which option is correct? A. 连接AB; B. 连接CD.',
+            'A. 若连接AB；B. 连接CD。',
+            'A. “连接AB”；B. 连接CD。',
+        ])('归属不完整或待判断表述保守跳过：%s', (question) => {
+            expect(parseFigure('true', null, raw(missingLine), question).figureSvg).not.toBeNull();
+        });
+
+        it('子图标签与几何点名重合时，不把点名句误当作选项分段', () => {
+            const pointsNamedAcrossFigures = {
+                ...valid,
+                figures: [
+                    { label: 'A', figure: labelledGeometry(['C', 'D'], [['C', 'D']]) },
+                    { label: 'B', figure: labelledGeometry(['A', 'B'], [['A', 'B']]) },
+                ],
+            };
+            const question = 'A is a point; line AB; B is a point; line CD.';
+            expect(parseFigure('true', null, raw(pointsNamedAcrossFigures), question).figureSvg).not.toBeNull();
+        });
+
+        it('非点名型中文标签仍兼容空格分段', () => {
+            const group = {
+                type: 'figure_group',
+                figures: [
+                    { label: '甲', figure: labelledGeometry(['A', 'B'], [['A', 'B']]) },
+                    { label: '乙', figure: labelledGeometry(['C', 'D'], [['C', 'D']]) },
+                ],
+            };
+            const missingLine = { ...group, figures: [{ label: '甲', figure: labelledGeometry(['A', 'B']) }, group.figures[1]] };
+            const question = '甲 连接AB；乙 连接CD。';
+            expect(parseFigure('true', null, raw(group), question).figureSvg).not.toBeNull();
+            expect(parseFigure('true', null, raw(missingLine), question).figureSvg).toBeNull();
+        });
+
+        it('图组冲突仍返回完整旧SVG，不改写输入结构或只保留成功子图', () => {
+            const before = raw(missingLine);
+            const legacy = '<svg xmlns="http://www.w3.org/2000/svg"><text>完整图组</text></svg>';
+            expect(parseFigure('true', legacy, before, 'A. 连接AB；B. 连接CD。'))
+                .toEqual({ hasFigure: true, figureSvg: legacy });
+            expect(raw(missingLine)).toBe(before);
+        });
+    });
+
     it('形状冲突时优先保留完整旧 SVG', () => {
         const legacy = '<svg xmlns="http://www.w3.org/2000/svg"><text>原有图形</text></svg>';
         expect(parseFigure('true', legacy, raw(area('rectangle')), '下图是一个正方形。')).toEqual({ hasFigure: true, figureSvg: legacy });
@@ -114,6 +318,216 @@ describe('题干与结构化配图的一致性', () => {
         expect(parseFigure('true', null, raw(area('rectangle')), 'It is not a square; it is a rectangle.').figureSvg).not.toBeNull();
         expect(parseFigure('true', null, raw(area('rectangle')), 'The area is 12 square centimeters.').figureSvg).not.toBeNull();
         expect(parseFigure('true', null, raw(area('rectangle')), 'Find the square root of 16.').figureSvg).not.toBeNull();
+    });
+
+    it('直接指代主图的中英文形状声明也执行结构校验', () => {
+        expect(parseFigure('true', null, raw(area('square')), '这是一个正方形，面积是多少？').figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(area('rectangle')), '这是一个正方形，面积是多少？')).toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(area('square')), 'This is a square. Find its area.').figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(area('rectangle')), 'This is a square. Find its area.')).toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(area('rectangle')), 'This is a square?').figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(area('rectangle')), '这是一个正方形？').figureSvg).not.toBeNull();
+        const legacy = '<svg xmlns="http://www.w3.org/2000/svg"><text>原有形状图</text></svg>';
+        expect(parseFigure('true', legacy, raw(area('rectangle')), 'This is a square. Find its area.'))
+            .toEqual({ hasFigure: true, figureSvg: legacy });
+    });
+
+    it('具名三角形和四边形声明也核对结构、特征和点名', () => {
+        const validTriangle = namedTriangle(50);
+        const invalidTriangle = namedTriangle(65);
+        for (const question of [
+            '三角形ABC是等腰三角形。',
+            '△ABC为等腰三角形。',
+            'Triangle ABC is an isosceles triangle.',
+        ]) {
+            expect(parseFigure('true', null, raw(validTriangle), question).figureSvg, question).not.toBeNull();
+            expect(parseFigure('true', null, raw(invalidTriangle), question), question)
+                .toEqual({ hasFigure: true, figureSvg: null });
+        }
+
+        for (const question of ['四边形ABCD是正方形。', 'ABCD为正方形。', 'Quadrilateral ABCD is a square.']) {
+            expect(parseFigure('true', null, raw(namedSquare()), question).figureSvg, question).not.toBeNull();
+            expect(parseFigure('true', null, raw(namedSquare(70)), question), question)
+                .toEqual({ hasFigure: true, figureSvg: null });
+        }
+
+        expect(parseFigure('true', null, raw(namedSquare()), '四边形ABCE是正方形。'))
+            .toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it.each([
+        ['长方形', 'rectangle', [[20, 30], [80, 30], [80, 70], [20, 70]]],
+        ['平行四边形', 'parallelogram', [[35, 20], [85, 20], [65, 75], [15, 75]]],
+        ['梯形', 'trapezoid', [[35, 20], [65, 20], [85, 75], [15, 75]]],
+    ])('具名%s的中英文声明均校验对应形状', (name, english, coordinates) => {
+        const valid = namedSquare();
+        const invalid = namedSquare();
+        const invalidCoordinates = [[20, 20], [75, 25], [80, 80], [20, 80]];
+        valid.points.forEach((point, index) => {
+            [point.x, point.y] = coordinates[index]!;
+            [invalid.points[index]!.x, invalid.points[index]!.y] = invalidCoordinates[index]!;
+        });
+        for (const question of [`四边形ABCD是${name}。`, `ABCD为${name}。`, `Quadrilateral ABCD is a ${english}.`]) {
+            expect(parseFigure('true', null, raw(valid), question).figureSvg, question).not.toBeNull();
+            expect(parseFigure('true', null, raw(invalid), question), question)
+                .toEqual({ hasFigure: true, figureSvg: null });
+        }
+    });
+
+    it('具名等边声明校验边长，不把等腰三角形当作等边', () => {
+        const equilateral = namedTriangle(50);
+        equilateral.points[2]!.y = 80 - 30 * Math.sqrt(3);
+        for (const question of ['三角形ABC为等边三角形。', 'Triangle ABC is an equilateral triangle.']) {
+            expect(parseFigure('true', null, raw(equilateral), question).figureSvg, question).not.toBeNull();
+            expect(parseFigure('true', null, raw(namedTriangle(50)), question), question)
+                .toEqual({ hasFigure: true, figureSvg: null });
+        }
+    });
+
+    it('具名形状的疑问、假设和判断语境仍保守跳过', () => {
+        const invalidTriangle = raw(namedTriangle(65));
+        for (const question of [
+            '三角形ABC是等腰三角形吗？',
+            '如果三角形ABC是等腰三角形，求面积。',
+            '判断三角形ABC是否为等腰三角形。',
+            '三角形ABC是等腰三角形，这个说法正确吗？',
+            '三角形ABC是等腰三角形。请判断这个说法。',
+            '三角形ABC是等腰三角形，若它有两条等边。',
+            '“三角形ABC是等腰三角形”。',
+            "'三角形ABC是等腰三角形'。",
+            'Triangle ABC is an isosceles triangle. True or false?',
+            'Triangle ABC is an isosceles triangle, if two sides are equal.',
+            "'Triangle ABC is an isosceles triangle'.",
+            '下列说法中正确的是：三角形ABC是等腰三角形。',
+            '选择正确的说法：三角形ABC是等腰三角形。',
+            '正误题：三角形ABC是等腰三角形。',
+            'Select the correct statement. Triangle ABC is an isosceles triangle.',
+        ]) {
+            expect(parseFigure('true', null, invalidTriangle, question).figureSvg, question).not.toBeNull();
+        }
+    });
+
+    it('具名声明按可见点名对应，不混用隐藏ID或不同大小写的点名', () => {
+        const question = '三角形ABC是等腰三角形。';
+        for (const labels of [['X', 'Y', 'Z'], ['a', 'B', 'C'], [undefined, undefined, undefined]]) {
+            const spec = namedTriangle(50);
+            const points = spec.points.map((point, index) => ({ ...point, label: labels[index] }));
+            expect(parseFigure('true', null, raw({ ...spec, points }), question))
+                .toEqual({ hasFigure: true, figureSvg: null });
+        }
+
+        const spec = namedTriangle(50);
+        const points = spec.points.map((point) => ({ ...point, id: `internal-${point.id}` }));
+        const polygons = [{ points: ['internal-A', 'internal-B', 'internal-C'] }];
+        expect(parseFigure('true', null, raw({ ...spec, points, polygons }), question).figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(spec), '三角形PQR为等腰三角形。'))
+            .toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(spec), '三角形ＡＢＣ为等腰三角形。').figureSvg).not.toBeNull();
+        spec.points[0]!.label = 'a';
+        expect(parseFigure('true', null, raw(spec), '三角形aBC为等腰三角形。').figureSvg).not.toBeNull();
+    });
+
+    it('英文直接指代句中的常见词不误识别为四边形点名', () => {
+        for (const question of ['This is a square. Find its area.', 'That is a square.', 'The figure is a square.']) {
+            expect(parseFigure('true', null, raw(area('square')), question).figureSvg, question).not.toBeNull();
+        }
+    });
+
+    it('具名四边形须对应主图边界顺序，允许循环和反向但拒绝交叉点名', () => {
+        const spec = raw(namedSquare());
+        for (const names of ['ABCD', 'BCDA', 'CDAB', 'DABC', 'DCBA', 'CBAD', 'BADC', 'ADCB']) {
+            expect(parseFigure('true', null, spec, `四边形${names}是正方形。`).figureSvg, names).not.toBeNull();
+        }
+        for (const names of ['ACBD', 'ABDC', 'ACDB']) {
+            expect(parseFigure('true', null, spec, `四边形${names}是正方形。`), names)
+                .toEqual({ hasFigure: true, figureSvg: null });
+        }
+    });
+
+    it('图中存在同名内部点不能代替声明中的多边形顶点', () => {
+        const spec = namedSquare();
+        spec.points[2].label = 'E';
+        spec.points.push({ id: 'inside', x: 50, y: 50, label: 'C' });
+        expect(parseFigure('true', null, raw(spec), '四边形ABCD是正方形。'))
+            .toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('具名主图保留共线中间点，并支持唯一实线闭合环', () => {
+        const spec = namedSquare();
+        spec.points.push({ id: 'E', x: 50, y: 20, label: 'E' });
+        spec.polygons[0].points = ['A', 'E', 'B', 'C', 'D'];
+        expect(parseFigure('true', null, raw(spec), '四边形ABCD是正方形。').figureSvg).not.toBeNull();
+
+        const triangle = namedTriangle(65);
+        const segments = [{ from: 'A', to: 'B' }, { from: 'B', to: 'C' }, { from: 'C', to: 'A' }];
+        expect(parseFigure('true', null, raw({ ...triangle, polygons: [], segments }), '三角形ABC是等腰三角形。'))
+            .toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('英文具名直角声明核对三角形特征', () => {
+        const right = raw(namedTriangle(20));
+        const scalene = raw(namedTriangle(65));
+        for (const description of ['right triangle', 'right-angled triangle', 'right angled triangle', 'right isosceles triangle']) {
+            const question = `Triangle ABC is a ${description}.`;
+            expect(parseFigure('true', null, right, question).figureSvg, question).not.toBeNull();
+            expect(parseFigure('true', null, scalene, question), question).toEqual({ hasFigure: true, figureSvg: null });
+        }
+    });
+
+    it('不把更长点名串的后四个字母或另一种形状强行对应成具名主图', () => {
+        const spec = raw(namedSquare(70));
+        for (const question of [
+            'XABCD是正方形。',
+            'E A B C D是正方形。',
+            "A'ABCD为正方形。",
+            'ABCD为正方形，比较它和另一个长方形的面积。',
+        ]) {
+            expect(parseFigure('true', null, spec, question).figureSvg, question).not.toBeNull();
+        }
+    });
+
+    it('具名形状冲突保留完整旧SVG且不改写输入结构', () => {
+        const spec = namedTriangle(65);
+        const before = raw(spec);
+        const legacy = '<svg xmlns="http://www.w3.org/2000/svg"><text>完整原配图</text></svg>';
+        expect(parseFigure('true', legacy, before, '三角形ABC是等腰三角形。'))
+            .toEqual({ hasFigure: true, figureSvg: legacy });
+        expect(raw(spec)).toBe(before);
+    });
+
+    it('具名图形的子图归属按图组标签隔离，冲突时保留整组旧图', () => {
+        const group = {
+            type: 'figure_group', figures: [
+                { label: '甲', figure: namedTriangle(50) },
+                { label: '乙', figure: namedTriangle(65) },
+            ],
+        };
+        const question = '图甲中：三角形ABC是等腰三角形；图乙中：三角形ABC是等腰三角形。';
+        expect(parseFigure('true', null, raw(group), question)).toEqual({ hasFigure: true, figureSvg: null });
+        const legacy = '<svg xmlns="http://www.w3.org/2000/svg"><text>完整原图组</text></svg>';
+        expect(parseFigure('true', legacy, raw(group), question)).toEqual({ hasFigure: true, figureSvg: legacy });
+        group.figures[1]!.figure = namedTriangle(50);
+        expect(parseFigure('true', null, raw(group), question).figureSvg).not.toBeNull();
+    });
+
+    it('具名声明不把复合图强行简化成单个主图', () => {
+        const spec = namedSquare(70);
+        spec.polygons.push({ points: ['A', 'B', 'C'] });
+        expect(parseFigure('true', null, raw(spec), '四边形ABCD是正方形。').figureSvg).not.toBeNull();
+    });
+
+    it('没有可见点名的面积、立体和坐标模板不冒充具名主图', () => {
+        const question = '三角形ABC是等腰三角形。';
+        expect(parseFigure('true', null, raw(area('triangle')), question))
+            .toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(solid('cuboid')), '四边形ABCD是正方形。'))
+            .toEqual({ hasFigure: true, figureSvg: null });
+        const coordinate = {
+            type: 'coordinate_plane', xMin: 0, xMax: 10, yMin: 0, yMax: 10, xStep: 1, yStep: 1,
+            points: [], segments: [], labels: [],
+        };
+        expect(parseFigure('true', null, raw(coordinate), question))
+            .toEqual({ hasFigure: true, figureSvg: null });
     });
 
     it.each([

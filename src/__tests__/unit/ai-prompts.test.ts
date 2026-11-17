@@ -78,6 +78,28 @@ describe('AI Prompts', () => {
             expect(generateFigurePrompt(null)).toContain('（无题目文字）');
         });
 
+        it.each(['zh', 'en'] as const)('重绘和相似题共用圆柱圆锥结构、角色和回退约束（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('下图是一个圆锥。'), generateSimilarQuestionPrompt(language, '下图是一个圆锥。', ['立体图形'], 'medium')]) {
+                expect(prompt).toContain('round_solid');
+                expect(prompt).toContain('shape:"cylinder"|"cone"');
+                expect(prompt).toContain('圆锥轮廓必须与底面椭圆相切');
+                expect(prompt).toContain('slantLabel 只适用于圆锥');
+                expect(prompt).toContain('半径（或直径的一半）、高、母线');
+                expect(prompt).toContain('不要用该模板表达斜圆柱、斜圆锥、圆台');
+                expect(prompt).toContain('半径/直径/高/母线的文字前缀不能放到其它角色字段');
+                expect(prompt).toContain('area_geometry、solid_geometry、round_solid、坐标图等模板会各自适配画布');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和相似题共用完整球体模板，不补未知量（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('下图是一个球体。'), generateSimilarQuestionPrompt(language, '下图是一个球体。', ['立体图形'], 'medium')]) {
+                expect(prompt).toContain('sphere_geometry：{type,radius,radiusLabel?,diameterLabel?,title?,fill?}');
+                expect(prompt).toContain('前实后虚的赤道椭圆');
+                expect(prompt).toContain('不能把平面圆、半球、球壳、截面、挖孔或组合体套成完整球体');
+                expect(prompt).toContain('不计算缺失标签或答案');
+            }
+        });
+
         it('重绘和新题配图共用圆的明确长度约束，不推断缺失单位', () => {
             const prompts = [
                 generateFigurePrompt('如图，半径为3cm，弦AC长4cm'),
@@ -95,6 +117,154 @@ describe('AI Prompts', () => {
             }
         });
 
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步可见点名的唯一性边界（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('如图，连接AB。'), generateSimilarQuestionPrompt(language, '如图，连接AB。', ['几何'], 'medium')]) {
+                expect(prompt).toContain('可见点名在同一子图内必须唯一，圆心也参与检查');
+                expect(prompt).toContain('不把重复的描述文字、隐藏ID或其它记法当作重复点名');
+                expect(prompt).toContain('不同子图可各自使用相同点名');
+                expect(prompt).toContain('不要为通过校验而换名、合并点或移动点');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('数轴点名共同避让但保留点位和刻度（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('数轴上的点A和点B。'), generateSimilarQuestionPrompt(language, '数轴上的点A和点B。', ['数轴'], 'medium')]) {
+                expect(prompt).toContain('数轴的可见字母点名也须唯一');
+                expect(prompt).toContain('不得通过移动点位、删刻度或改数值解决拥挤');
+                expect(prompt).toContain('同位置的不同点名按题意保留，不擅自合并或换名');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步题干点名关系（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('如图，连接AB，且AB⊥CD，∠ABC为直角。'), generateSimilarQuestionPrompt(language, '如图，连接AB，且AB⊥CD，∠ABC为直角。', ['几何'], 'medium')]) {
+                expect(prompt).toContain('题干明确写出“连接AB”“线段AB”“∠ABC”“AB∥CD”或“AB⊥CD”等关系时');
+                expect(prompt).toContain('不能把相邻点、对角线、其它角或其它子图冒充目标关系');
+                expect(prompt).toContain('若关系中的部分点名已在该图出现、其余点名却缺失，不能静默省略该关系');
+                expect(prompt).toContain('直角关系须由坐标或直角标记支持');
+                expect(prompt).toContain('平行和垂直须由对应线段方向支持');
+                expect(prompt).toContain('只出现变量或长度求值时不要猜测');
+                expect(prompt).toContain('关系无法唯一分解或整组点名都不在该图时保持保守');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('图组关系只按明确子图标签校验（%s）', (language) => {
+            const prompts = [
+                generateFigurePrompt('图A中连接AB；图B中连接CD。'),
+                generateSimilarQuestionPrompt(language, '图A中连接AB；图B中连接CD。', ['几何'], 'medium'),
+            ];
+            for (const prompt of prompts) {
+                expect(prompt).toContain('若明确用“图A中……；图B中……”');
+                expect(prompt).toContain('必须把每段条件只校验到对应 label');
+                expect(prompt).toContain('选择题、判断题和真假判断中互相矛盾的选项内容是待判命题');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步直角与角名的绑定规则（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('∠AOB，∠ABC为直角。'), generateSimilarQuestionPrompt(language, '∠AOB，∠ABC为直角。', ['几何'], 'medium')]) {
+                expect(prompt).toContain('直角条件必须与对应角名紧邻绑定');
+                expect(prompt).toContain('不能把后一个角的条件套给前一个角');
+                expect(prompt).toContain('提问、待证明和假设不能当作已知直角');
+                expect(prompt).toContain('190°或90.5°也不能截成90°');
+                expect(prompt).toContain('不把有限直角校验当作通用角度验算');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步后置圆归属（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('AB是圆O的弦。'), generateSimilarQuestionPrompt(language, 'AC是外圆的一条直径。', ['圆'], 'medium')]) {
+                expect(prompt).toContain('后置圆归属，必须核对当前关系指定的圆');
+                expect(prompt).toContain('完整圆名优先于圆心点名');
+                expect(prompt).toContain('同名圆不能按端点或半径猜选');
+                expect(prompt).toContain('只约束当前关系，不能串用到后续线段');
+                expect(prompt).toContain('未标注的内外圆名不根据尺寸补写');
+                expect(prompt).toContain('不改点位或增加线段');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步题干长度与图内标注（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('已知AB=5厘米。'), generateSimilarQuestionPrompt(language, 'AB has length 5 cm.', ['几何'], 'medium')]) {
+                expect(prompt).toContain('题干明确写出“AB=5厘米”');
+                expect(prompt).toContain('必须逐项精确核对数值和单位换算');
+                expect(prompt).toContain('反向点名视为同一线段');
+                expect(prompt).toContain('支持有限小数、普通分数、带分数');
+                expect(prompt).toContain('不根据坐标比例推算长度');
+                expect(prompt).toContain('不为没有标注的线段补值');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步题干坐标的点名及数值（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('点A的坐标为(1,2)。'), generateSimilarQuestionPrompt(language, 'Point A has coordinates (1,2).', ['坐标'], 'medium')]) {
+                expect(prompt).toContain('必须核对可见同名点及横纵坐标');
+                expect(prompt).toContain('不能交换横纵轴、丢掉负号或用隐藏ID代替可见点名');
+                expect(prompt).toContain('明确按子图分段时缺失点名使整组回退');
+                expect(prompt).toContain('basic_geometry 的相对布局坐标不能当作数学坐标');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步主图尺寸的方向及归属（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('下图是长方形，长6厘米，宽4厘米。'), generateSimilarQuestionPrompt(language, 'The solid is a cuboid.', ['几何'], 'medium')]) {
+                expect(prompt).toContain('明确主图声明后的长、宽、高、底、上下底、边长或棱长');
+                expect(prompt).toContain('中文或英文维度前缀也参与比较，但保存原文');
+                expect(prompt).toContain('只允许整组水平长宽互换，高保持竖向对应');
+                expect(prompt).toContain('不能重复借用同一个标注绕过冲突');
+                expect(prompt).toContain('梯形上底与下底不能互换');
+                expect(prompt).toContain('三角形顶点说明不是边长');
+                expect(prompt).toContain('“深”只有图内也有明确深度标签时才比较');
+                expect(prompt).toContain('不把另一个物体、辅助线、疑问、假设或未知公式的数值套给主图');
+                expect(prompt).toContain('面积与立体模板不跨类别套用尺寸');
+                expect(prompt).toContain('不补值、不改坐标比例或原文');
+                expect(prompt).toContain('支持“长宽高分别是4、3、2厘米”');
+                expect(prompt).toContain('只在维度名无重复、数值个数与顺序一一对应时逐项核对');
+                expect(prompt).toContain('数量不符或表达不完整时不猜');
+                expect(prompt).toContain('英文表达 length, width, and height are 4 cm, 3 cm and 2 cm respectively');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步圆线段点名与说明的边界（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('radius OB has length 3 cm.'), generateSimilarQuestionPrompt(language, 'Given AB is a diameter.', ['圆'], 'medium')]) {
+                expect(prompt).toContain('半径、弦和直径名称只含两个规范点名');
+                expect(prompt).toContain('英文长度说明与前置说明不属于点名');
+                expect(prompt).toContain('不从连续或空格分隔的三点长名称截取两个点');
+                expect(prompt).toContain('不从自然语言长度求值或补写标注');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步圆图的线段、角、弧和扇形关系（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('圆O中，半径OA、弦AB、直径AC、圆心角AOB。'), generateSimilarQuestionPrompt(language, '圆O中，半径OA、弦AB、直径AC、圆心角AOB。', ['圆'], 'medium')]) {
+                expect(prompt).toContain('circle_geometry 中题干明确写出“半径OA”“弦AB”“直径AB”“连接AB”“圆心角AOB”“圆周角ACB”');
+                expect(prompt).toContain('直径可以作为弦，但普通弦不能冒充直径');
+                expect(prompt).toContain('半径和圆心角的两条边必须连接圆心与对应圆周点');
+                expect(prompt).toContain('圆周角的两条边必须是实际存在的弦');
+                expect(prompt).toContain('两端点弧可用 arcType 区分优弧或劣弧');
+                expect(prompt).toContain('三点弧名的中间点必须位于最终选定的弧段内部');
+                expect(prompt).toContain('弧名中的点必须互不相同且均为圆周点');
+                expect(prompt).toContain('不能使用圆心充当第三点');
+                expect(prompt).toContain('可用 through 或 arcType 选择方向');
+                expect(prompt).toContain('半圆必须由直径端点和第三点确定方向');
+                expect(prompt).toContain('“AB是弦”“AB为直径”等后置表达也必须对应');
+                expect(prompt).toContain('弧、优弧、劣弧、半圆和扇形也必须核对题干指定圆心');
+                expect(prompt).toContain('逗号后的关系沿用当前圆范围');
+                expect(prompt).toContain('规范弧名只含两个或三个点名，扇形名只含三个点名');
+                expect(prompt).toContain('后续英文长度、面积说明不属于点名');
+                expect(prompt).toContain('不能从四点长名称截取前三点');
+                expect(prompt).toContain('basic_geometry 不因此推断弧方向或扇形区域');
+                expect(prompt).toContain('只使用结构自身的 arcType 和 through 确定弧段');
+                expect(prompt).toContain('不能借题干的第三点临时改变方向');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图校验 basic_geometry 中圆与辅助线的明确关系（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('圆O中，半径OA、弦AB、直径AC、圆心角AOB。'), generateSimilarQuestionPrompt(language, '圆O中，半径OA、弦AB、直径AC、圆心角AOB。', ['圆与辅助线'], 'medium')]) {
+                expect(prompt).toContain('basic_geometry 含 circles 时');
+                expect(prompt).toContain('半径、弦、直径、圆心角或圆周角');
+                expect(prompt).toContain('半径一端必须是该圆圆心');
+                expect(prompt).toContain('直径还必须经过圆心');
+                expect(prompt).toContain('basic_geometry 不表达圆弧方向或扇形区域');
+                expect(prompt).toContain('circles.label');
+                expect(prompt).toContain('完整圆名唯一匹配');
+                expect(prompt).toContain('不能按半径大小猜测内外归属');
+                expect(prompt).toContain('重名对应多个圆时回退');
+            }
+        });
+
         it.each(['zh', 'en'] as const)('重绘和新题配图区分主图声明与后续提问（%s）', (language) => {
             const prompts = [
                 generateFigurePrompt('下图是一个正方形，面积是多少？'),
@@ -104,6 +274,17 @@ describe('AI Prompts', () => {
                 expect(prompt).toContain('声明之后的面积、周长或体积求值提问不能取消前面的明确形状条件');
                 expect(prompt).toContain('不能因整题带问号而跳过形状核对');
                 expect(prompt).toContain('形状疑问、命题判断、待证明、假设条件或引用内容不作为既定事实');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图核对同名角的明确度数（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('∠AOB=60°。'), generateSimilarQuestionPrompt(language, '∠AOB=60°。', ['角度'], 'medium')]) {
+                expect(prompt).toContain('同一可见顶点及两条角边的完整度数标注精确比较');
+                expect(prompt).toContain('∠AOB 与 ∠BOA 是同一个角');
+                expect(prompt).toContain('直角方框也表示90度');
+                expect(prompt).toContain('不按示意坐标推算普通角度');
+                expect(prompt).toContain('不给缺失标注补答案');
+                expect(prompt).toContain('后文引入其它图不能取消此前明确的本图条件');
             }
         });
 
@@ -127,13 +308,42 @@ describe('AI Prompts', () => {
             }
         });
 
+        it.each(['zh', 'en'] as const)('重绘和新题配图同步菱形的边与高归属（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('下图是一个菱形。'), generateSimilarQuestionPrompt(language, '下图是一个菱形。', ['菱形'], 'medium')]) {
+                expect(prompt).toContain('四边等长且两组对边平行，不要求四个直角');
+                expect(prompt).toContain('正方形也可满足菱形条件');
+                expect(prompt).toContain('分段、对角线和垂直高不能冒充完整边');
+                expect(prompt).toContain('不要输出不存在的 rhombus 模板类型或 shape 枚举');
+                expect(prompt).toContain('不按绘图比例求物理长度，不移动点或补答案');
+            }
+        });
+
         it.each(['zh', 'en'] as const)('重绘和新题配图同步三角形子类型与完整边关系（%s）', (language) => {
             for (const prompt of [generateFigurePrompt('下图是一个等腰直角三角形。'), generateSimilarQuestionPrompt(language, '下图是一个等腰直角三角形。', ['三角形'], 'medium')]) {
                 expect(prompt).toContain('等腰直角必须是两条直角边等长');
                 expect(prompt).toContain('三条完整边都有同类单位的明确数值时精确核对勾股关系');
                 expect(prompt).toContain('面积图的高只有在apexRatio为0或1时才是完整边');
-                expect(prompt).toContain('范围0至1、默认0.5');
+                expect(prompt).toContain('范围-1至2、默认0.5');
                 expect(prompt).toContain('不从其它三角形、疑问或待证明内容补条件');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图保留外部高、底边及延长线（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('三角形的高落在底边延长线上。'), generateSimilarQuestionPrompt(language, '三角形的高落在底边延长线上。', ['底和高'], 'medium')]) {
+                expect(prompt).toContain('小于0或大于1为左侧或右侧外部高');
+                expect(prompt).toContain('不能把外部顶点夹到端点或改成内部高');
+                expect(prompt).toContain('允许向左倾斜或垂足在底边外');
+                expect(prompt).toContain('底长只对应原底边，不包括延长部分');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图核对完整三边，不把未知边或候选长度当作已知（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('下图是一个三角形。'), generateSimilarQuestionPrompt(language, '下图是一个三角形。', ['三角形'], 'medium')]) {
+                expect(prompt).toContain('任意两边之和严格大于第三边，等于也属于矛盾');
+                expect(prompt).toContain('无单位值只与无单位值比较');
+                expect(prompt).toContain('未知边、分段、内部高或缺失单位不用于凑出三条完整边');
+                expect(prompt).toContain('疑问、判断、假设和候选长度不当作既定主图事实');
+                expect(prompt).toContain('不猜应修改哪条边或填出答案');
             }
         });
 
@@ -143,6 +353,25 @@ describe('AI Prompts', () => {
                 expect(prompt).toContain('3.4不能当作两位整数');
                 expect(prompt).toContain('不把微小的非零小数部分舍入掉');
                 expect(prompt).toContain('未知填空仍保留');
+            }
+        });
+
+        it('重绘和新题配图明确小数加减竖式的列对齐边界', () => {
+            for (const prompt of [generateFigurePrompt('计算12.3+4'), generateSimilarQuestionPrompt('zh', '计算12.3+4', ['小数加法'], 'medium')]) {
+                expect(prompt).toContain('不含 partialProducts 的加减竖式若所有可见行都能明确拆成数字、未知格和小数点');
+                expect(prompt).toContain('含部分积的加减、字母、复杂表达式或不确定列关系时不要套用小数网格');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图保留小数乘法的末位对齐与题面字符（%s）', (language) => {
+            for (const prompt of [generateFigurePrompt('计算3.4×2.05'), generateSimilarQuestionPrompt(language, '计算3.4×2.05', ['小数乘法'], 'medium')]) {
+                expect(prompt).toContain('小数乘法按末位数字对齐');
+                expect(prompt).toContain('不额外占数字列');
+                expect(prompt).toContain('各行保留题图中的小数点、末尾零和作答空格');
+                expect(prompt).toContain('也不自行推算或改写部分积');
+                expect(prompt).toContain('小数点和正负号不计入乘数的数字位数');
+                expect(prompt).toContain('小数乘数从最右数字开始以 0 计数');
+                expect(prompt).toContain('2.05 中 5 对应 shift:0、2 对应 shift:2');
             }
         });
 
@@ -164,6 +393,15 @@ describe('AI Prompts', () => {
             expect(prompt).toContain('成对的 \\left ... \\right');
             expect(prompt).toContain('不要把公式拆开、改写或自行求值');
             expect(prompt).toContain('使用完整旧 SVG、原图或手动配图兜底');
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和新题配图的统计图保留真实数值范围（%s）', (language) => {
+            const prompts = [generateFigurePrompt('折线图数据为0.2、0.5。'), generateSimilarQuestionPrompt(language, '折线图数据为0.2、0.5。', ['统计图'], 'medium')];
+            for (const prompt of prompts) {
+                expect(prompt).toContain('bar_chart 保留 0 基线');
+                expect(prompt).toContain('不要为了好看把小数数据上限补成 1');
+                expect(prompt).toContain('不要把全负数数据改成正数范围');
+            }
         });
 
         it('提供错题本候选知识点时只列出这些标签，不再按学科、年级取标签', () => {

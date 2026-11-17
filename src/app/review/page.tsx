@@ -18,7 +18,7 @@ import { formatDateTime, getDayRange } from "@/lib/date-time";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { usePageTitle } from "@/lib/page-title";
 import { REVIEW_INTERVALS, STUDENT_REVIEW_INTERVALS } from "@/lib/review-schedule";
-import type { DueReviewItem, PaginatedResponse, StudentAnswerQuestion } from "@/types/api";
+import type { DueReviewItem, PaginatedResponse, StudentAnswerQuestion, StudentSubmission } from "@/types/api";
 
 export default function ReviewPage() {
     const { t } = useLanguage();
@@ -26,23 +26,64 @@ export default function ReviewPage() {
     const { data: session } = useSession();
     usePageTitle(t.review.title);
     const [data, setData] = useState<PaginatedResponse<DueReviewItem> | null>(null);
+    const [latestSubmission, setLatestSubmission] = useState<StudentSubmission | null>(null);
+    const [submittedSubmissionId, setSubmittedSubmissionId] = useState<string | null>(null);
     const [page, setPage] = useState(1);
+    const [continueReview, setContinueReview] = useState(false);
 
-    const reviewPageSize = session?.user?.role === "user" ? 1000 : DEFAULT_PAGE_SIZE;
+    const role = session?.user?.role;
+    const reviewPageSize = role === "user" ? 1000 : DEFAULT_PAGE_SIZE;
     const fetchDue = useCallback(async (targetPage: number) => {
         try {
-            setData(await apiClient.get<PaginatedResponse<DueReviewItem>>(`/api/review/due?page=${targetPage}&pageSize=${reviewPageSize}`));
+            const nextData = await apiClient.get<PaginatedResponse<DueReviewItem>>(`/api/review/due?page=${targetPage}&pageSize=${reviewPageSize}`);
+            setData(nextData);
+            if (role === "user") {
+                try {
+                    setLatestSubmission(await apiClient.get<StudentSubmission | null>("/api/student-submissions?kind=review"));
+                } catch (error) {
+                    frontendLogger.error('[Review]', 'Failed to fetch latest review submission', { error });
+                    setLatestSubmission(null);
+                }
+            } else {
+                setLatestSubmission(null);
+            }
         } catch (error) {
             frontendLogger.error('[Review]', 'Failed to fetch due reviews', { error });
         }
-    }, [reviewPageSize]);
+    }, [reviewPageSize, role]);
+
+    const handleSubmissionUpdate = useCallback((submission: StudentSubmission) => {
+        setLatestSubmission(submission);
+        setSubmittedSubmissionId(submission.id);
+        if (submission.status !== "grading") void fetchDue(1);
+    }, [fetchDue]);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- 数据请求：进入页面或翻页时加载，请求完成后更新结果
-        fetchDue(page);
+        void fetchDue(page);
+        const refresh = () => void fetchDue(page);
+        const timer = window.setInterval(refresh, 60_000);
+        window.addEventListener("focus", refresh);
+        window.addEventListener("visibilitychange", refresh);
+        return () => {
+            window.clearInterval(timer);
+            window.removeEventListener("focus", refresh);
+            window.removeEventListener("visibilitychange", refresh);
+        };
     }, [page, fetchDue]);
 
     const todayStart = getDayRange(new Date(), timeZone).start;
+    const todayEnd = getDayRange(new Date(), timeZone).end;
+    const latestAnswers = new Set(latestSubmission?.answers.flatMap((answer) => answer.errorItemId ? [answer.errorItemId] : []) ?? []);
+    const latestCoversDueToday = Boolean(
+        session?.user?.role === "user"
+        && data?.items.length
+        && latestSubmission?.kind === "review"
+        && new Date(latestSubmission.createdAt) >= todayStart
+        && new Date(latestSubmission.createdAt) < todayEnd
+        && data.items.every((item) => latestAnswers.has(item.id)),
+    );
+    const showLatestResult = data?.items.length === 0 || (latestCoversDueToday && submittedSubmissionId === latestSubmission?.id && !continueReview);
     const dueLabel = (item: DueReviewItem) => {
         const date = formatDateTime(item.nextReviewAt, "MM/dd", timeZone);
         return new Date(item.nextReviewAt) < todayStart
@@ -70,8 +111,12 @@ export default function ReviewPage() {
                 </div>
             )}
 
-            {data && data.total === 0 && (
+            {data && data.total === 0 && session?.user?.role === "admin" && (
                 <EmptyState icon={CalendarCheck} title={t.review.empty} description={t.review.emptyHint} />
+            )}
+
+            {data && data.total === 0 && session?.user?.role === "user" && !latestSubmission && (
+                <EmptyState icon={CalendarCheck} title={t.review.empty} description={t.review.studentEmptyHint} />
             )}
 
             {data && data.items.length > 0 && session?.user?.role === "admin" && (
@@ -95,7 +140,7 @@ export default function ReviewPage() {
                 </div>
             )}
 
-            {data && session?.user?.role === "user" && (
+            {data && data.items.length > 0 && session?.user?.role === "user" && !showLatestResult && (
                 <StudentAnswerWorkspace
                     kind="review"
                     questions={data.items.map((item): StudentAnswerQuestion => ({
@@ -108,6 +153,17 @@ export default function ReviewPage() {
                         mode: item.mode,
                         options: item.options,
                     }))}
+                    onSubmissionUpdate={handleSubmissionUpdate}
+                />
+            )}
+
+            {data && session?.user?.role === "user" && showLatestResult && latestSubmission && (
+                <StudentAnswerWorkspace
+                    kind="review"
+                    questions={[]}
+                    initialSubmission={latestSubmission}
+                    onContinueReview={data.items.length > 0 && latestCoversDueToday ? () => setContinueReview(true) : undefined}
+                    onSubmissionUpdate={handleSubmissionUpdate}
                 />
             )}
 

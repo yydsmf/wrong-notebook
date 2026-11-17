@@ -1,10 +1,15 @@
 import { z } from 'zod';
 import { sanitizeFigureSvg } from './figure-svg';
 import { layoutFigureGroup } from './figure-group-layout';
+import { createFigureAxisTicks } from './figure-axis-ticks';
+import { getFigureChartDomain } from './figure-chart-scale';
 import { tokenizeFigureText } from './figure-text-tokens';
 import { getFigureGeometryViewport, layoutFigureGeometryLabels } from './figure-label-layout';
 import { validateCircleLengths, validateFigureLengths, validateRightAngleLabel } from './figure-measurements';
 import { validateFigureQuestionConsistency } from './figure-question-consistency';
+import { ARC_EPSILON, resolveCircleArcDelta } from './circle-arc';
+import { projectRoundSolid, roundSolidSchema, sphereGeometrySchema, validateRoundSolidLengths, validateSphereLengths } from './figure-round-solids';
+import type { RoundSolidSpec, SphereGeometrySpec } from './figure-round-solids';
 import type { FigureAngularLabel, FigureCircleLabel, FigureLabelBox, FigureLabelObstacle, FigurePoint, FigureSegmentLabel } from './figure-label-layout';
 
 const figureGraphemeSegmenter = new Intl.Segmenter('und', { granularity: 'grapheme' });
@@ -35,6 +40,13 @@ const labelSchema = z.object({
     y: z.number().finite().min(0).max(100),
 });
 
+const divisionStepSchema = z.object({
+    value: z.string().min(1).max(40),
+    subtract: z.string().min(1).max(40),
+    label: z.string().max(20).optional(),
+    shift: z.number().int().min(0).max(8),
+});
+
 const verticalArithmeticSchema = z.object({
     type: z.literal('vertical_arithmetic'),
     operation: operationSchema.default('×'),
@@ -45,7 +57,9 @@ const verticalArithmeticSchema = z.object({
         label: z.string().max(20).optional(),
         shift: z.number().int().min(0).max(8).optional(),
     })).max(8).default([]),
+    divisionSteps: z.array(divisionStepSchema).max(8).default([]),
     result: z.string().max(40).optional(),
+    remainder: z.string().max(40).optional(),
     note: z.string().max(100).optional(),
 });
 
@@ -187,7 +201,7 @@ const areaGeometrySchema = z.object({
     height: z.number().finite().positive().max(100),
     topWidth: z.number().finite().positive().max(100).optional(),
     offset: z.number().finite().min(-50).max(50).optional(),
-    apexRatio: z.number().finite().min(0).max(1).optional(),
+    apexRatio: z.number().finite().min(-1).max(2).optional(),
     baseLabel: z.string().max(40).optional(),
     heightLabel: z.string().max(40).optional(),
     topLabel: z.string().max(40).optional(),
@@ -311,11 +325,13 @@ const lineChartSchema = z.object({
     type: z.literal('line_chart'),
     categories: z.array(z.string().min(1).max(30)).min(2).max(30),
     values: z.array(z.number().finite()).min(2).max(30),
-    maxValue: z.number().finite().positive().optional(),
+    maxValue: z.number().finite().optional(),
     minValue: z.number().finite().optional(),
     unit: z.string().max(20).optional(),
     title: z.string().max(100).optional(),
-}).refine((value) => value.categories.length === value.values.length, 'line_chart categories and values must match');
+}).refine((value) => value.categories.length === value.values.length, 'line_chart categories and values must match')
+    .refine((value) => value.maxValue === undefined || value.minValue === undefined || value.maxValue > value.minValue,
+        'line_chart maxValue must be greater than minValue');
 
 const gridShapeSchema = z.object({
     type: z.literal('grid_shape'),
@@ -341,6 +357,8 @@ const singleFigureSchemas = [
     circleGeometrySchema,
     areaGeometrySchema,
     solidGeometrySchema,
+    roundSolidSchema,
+    sphereGeometrySchema,
     basicGeometrySchema,
     barChartSchema,
     lineChartSchema,
@@ -401,13 +419,94 @@ function normalizeText(value: string): string {
         .trim().replace(/\s+/g, ' ');
 }
 
+function stripArithmeticSign(value: string): string {
+    return value.replace(/^[+\-−]/u, '');
+}
+
 function parseIntegerToken(value: string): bigint | null {
-    if (!/^-?\d+$/.test(value)) return null;
+    if (!/^[+\-−]?\d+$/u.test(value)) return null;
     try {
-        return BigInt(value);
+        return BigInt(value.replace(/^−/u, '-'));
     } catch {
         return null;
     }
+}
+
+function integerDigits(value: string): string | null {
+    return /^[+\-−]?\d+$/u.test(value) ? stripArithmeticSign(value) : null;
+}
+
+function parseNonNegativeFractionInteger(value: string): bigint | null {
+    if (!/^\+?\d+$/u.test(value)) return null;
+    try {
+        return BigInt(value.replace(/^\+/, ''));
+    } catch {
+        return null;
+    }
+}
+
+interface DivisionStepExpectation {
+    value: bigint;
+    subtract: bigint;
+    required: boolean;
+}
+
+type DivisionStep = z.infer<typeof divisionStepSchema>;
+
+function divisionProducts(topText: string, bottomText: string): { quotient: bigint; remainder: bigint; steps: Map<number, DivisionStepExpectation> } | null {
+    const top = parseIntegerToken(topText);
+    const bottom = parseIntegerToken(bottomText);
+    if (top === null || bottom === null || top < BigInt(0) || bottom <= BigInt(0)) return null;
+    const digits = integerDigits(topText);
+    if (digits === null) return null;
+    let remainder = BigInt(0);
+    const steps = new Map<number, DivisionStepExpectation>();
+    for (const [index, digit] of Array.from(digits).entries()) {
+        remainder = remainder * BigInt(10) + BigInt(digit);
+        const quotientDigit = remainder / bottom;
+        const shift = digits.length - index - 1;
+        steps.set(shift, { value: remainder, subtract: quotientDigit * bottom, required: quotientDigit > BigInt(0) });
+        remainder %= bottom;
+    }
+    return { quotient: top / bottom, remainder: top % bottom, steps };
+}
+
+function validateUnknownDividendSteps(dividendDigits: string, steps: readonly DivisionStep[], divisor: bigint): boolean {
+    if (steps.length === 0) return true;
+    const digitAt = (shift: number) => dividendDigits[dividendDigits.length - 1 - shift];
+    const stepsByShift = new Map(steps.map((step) => [step.shift, step]));
+    const possibleDigits = Array.from({ length: 10 }, (_, digit) => BigInt(digit));
+    let remainders = new Set([BigInt(0)]);
+
+    // Unknown question digits are explored only where a step constrains them; omitted rows must be zero for every possible digit.
+    for (let shift = dividendDigits.length - 1; shift >= 0; shift -= 1) {
+        const sourceDigit = digitAt(shift);
+        const digits = sourceDigit && /^\d$/u.test(sourceDigit) ? [BigInt(sourceDigit)] : possibleDigits;
+        const step = stepsByShift.get(shift);
+        const expectedValue = step ? parseIntegerToken(step.value) : null;
+        const expectedSubtract = step ? parseIntegerToken(step.subtract) : null;
+        const nextRemainders = new Set<bigint>();
+
+        for (const remainder of remainders) {
+            for (const digit of digits) {
+                const value = remainder * BigInt(10) + digit;
+                const quotient = value / divisor;
+                const subtract = quotient * divisor;
+                if (!step) {
+                    if (quotient !== BigInt(0)) return false;
+                    nextRemainders.add(value);
+                } else {
+                    if ((expectedValue !== null && value !== expectedValue)
+                        || (expectedSubtract !== null && subtract !== expectedSubtract)) continue;
+                    nextRemainders.add(value - subtract);
+                }
+                if (nextRemainders.size > 4096) return false;
+            }
+        }
+        if (nextRemainders.size === 0) return false;
+        remainders = nextRemainders;
+    }
+    return true;
 }
 
 function normalizeVerticalArithmetic(spec: z.infer<typeof verticalArithmeticSchema>): z.infer<typeof verticalArithmeticSchema> {
@@ -422,14 +521,16 @@ function normalizeVerticalArithmetic(spec: z.infer<typeof verticalArithmeticSche
 
     // 只复算已有的纯整数；不能把填空、未知数字或表达式变成答案。
     const hasNumericResult = spec.result !== undefined && parseIntegerToken(spec.result) !== null;
+    const hasNumericRemainder = spec.remainder !== undefined && parseIntegerToken(spec.remainder) !== null;
     if (spec.operation === '×') {
-        const bottomDigits = spec.bottom.replace(/^-/, '').split('').reverse();
+        const bottomDigits = integerDigits(spec.bottom)?.split('').reverse() ?? [];
+        const multiplierSign = bottom < BigInt(0) ? BigInt(-1) : BigInt(1);
         normalized.partialProducts = normalized.partialProducts.map((partial, index) => {
             const shift = partial.shift ?? index;
             const digit = bottomDigits[shift];
             if (digit === undefined || parseIntegerToken(partial.value) === null) return partial;
             // 部分积只存单个数位的乘积，数位错开交给 shift 绘制。
-            const value = (top * BigInt(digit)).toString();
+            const value = (top * BigInt(digit) * multiplierSign).toString();
             return { ...partial, value, shift };
         });
         if (hasNumericResult) normalized.result = (top * bottom).toString();
@@ -437,6 +538,12 @@ function normalizeVerticalArithmetic(spec: z.infer<typeof verticalArithmeticSche
         if (hasNumericResult) normalized.result = (top + bottom).toString();
     } else if (spec.operation === '-') {
         if (hasNumericResult) normalized.result = (top - bottom).toString();
+    } else if (spec.operation === '÷') {
+        const division = divisionProducts(spec.top, spec.bottom);
+        if (division) {
+            if (hasNumericResult) normalized.result = division.quotient.toString();
+            if (hasNumericRemainder) normalized.remainder = division.remainder.toString();
+        }
     }
     return normalized;
 }
@@ -453,7 +560,14 @@ function normalizeSingleFigureSpec(spec: SingleFigureSpec): SingleFigureSpec {
                     value: normalizeText(partial.value),
                     ...(partial.label ? { label: normalizeText(partial.label) } : {}),
                 })),
+                divisionSteps: spec.divisionSteps.map((step) => ({
+                    ...step,
+                    value: normalizeText(step.value),
+                    subtract: normalizeText(step.subtract),
+                    ...(step.label ? { label: normalizeText(step.label) } : {}),
+                })),
                 ...(spec.result ? { result: normalizeText(spec.result) } : {}),
+                ...(spec.remainder ? { remainder: normalizeText(spec.remainder) } : {}),
                 ...(spec.note ? { note: normalizeText(spec.note) } : {}),
             });
         case 'fraction':
@@ -543,6 +657,22 @@ function normalizeSingleFigureSpec(spec: SingleFigureSpec): SingleFigureSpec {
                 ...(spec.widthLabel ? { widthLabel: normalizeText(spec.widthLabel) } : {}),
                 ...(spec.depthLabel ? { depthLabel: normalizeText(spec.depthLabel) } : {}),
                 ...(spec.heightLabel ? { heightLabel: normalizeText(spec.heightLabel) } : {}),
+                ...(spec.title ? { title: normalizeText(spec.title) } : {}),
+            };
+        case 'round_solid':
+            return {
+                ...spec,
+                ...(spec.radiusLabel ? { radiusLabel: normalizeText(spec.radiusLabel) } : {}),
+                ...(spec.diameterLabel ? { diameterLabel: normalizeText(spec.diameterLabel) } : {}),
+                ...(spec.heightLabel ? { heightLabel: normalizeText(spec.heightLabel) } : {}),
+                ...(spec.slantLabel ? { slantLabel: normalizeText(spec.slantLabel) } : {}),
+                ...(spec.title ? { title: normalizeText(spec.title) } : {}),
+            };
+        case 'sphere_geometry':
+            return {
+                ...spec,
+                ...(spec.radiusLabel ? { radiusLabel: normalizeText(spec.radiusLabel) } : {}),
+                ...(spec.diameterLabel ? { diameterLabel: normalizeText(spec.diameterLabel) } : {}),
                 ...(spec.title ? { title: normalizeText(spec.title) } : {}),
             };
         case 'basic_geometry':
@@ -671,6 +801,23 @@ function hasSelfIntersectingPolygon(points: Array<{ x: number; y: number }>): bo
     return false;
 }
 
+function hasConflictingDuplicateUndirectedSegments(
+    segments: readonly { from: string; to: string; label?: string; dashed?: boolean }[],
+): boolean {
+    const groups = new Map<string, typeof segments[number][]>();
+    for (const segment of segments) {
+        const key = JSON.stringify([segment.from, segment.to].sort());
+        groups.set(key, [...(groups.get(key) ?? []), segment]);
+    }
+    return [...groups.values()].some((group) => {
+        if (group.length < 2) return false;
+        if (new Set(group.map(({ dashed }) => Boolean(dashed))).size > 1) return true;
+        const labels = group.map(({ label }) => label?.trim());
+        if (labels.some((label) => !label) || new Set(labels).size !== labels.length) return true;
+        return !validateFigureLengths(labels.map((label) => ({ label })), true);
+    });
+}
+
 interface AreaPoint {
     x: number;
     y: number;
@@ -680,6 +827,7 @@ interface AreaGeometryLayout {
     polygon: AreaPoint[];
     heightFrom: AreaPoint;
     heightTo: AreaPoint;
+    baseExtension?: { from: AreaPoint; to: AreaPoint };
     baseLabelPoint: AreaPoint;
     topLabelPoint?: AreaPoint;
 }
@@ -687,7 +835,9 @@ interface AreaGeometryLayout {
 function getAreaGeometryLayout(spec: z.infer<typeof areaGeometrySchema>): AreaGeometryLayout | null {
     const declaredTopWidth = spec.topWidth ?? spec.width * 0.6;
     const horizontalExtent = Math.max(spec.width + Math.abs(spec.offset ?? 0), declaredTopWidth + Math.abs(spec.offset ?? 0));
-    const scale = 70 / Math.max(spec.width, spec.height, horizontalExtent);
+    const apexRatio = spec.apexRatio ?? 0.5;
+    const triangleExtent = spec.shape === 'triangle' ? spec.width * (Math.max(1, apexRatio) - Math.min(0, apexRatio)) : 0;
+    const scale = 70 / Math.max(spec.width, spec.height, horizontalExtent, triangleExtent);
     const width = spec.width * scale;
     const height = spec.height * scale;
     const topWidth = declaredTopWidth * scale;
@@ -702,7 +852,7 @@ function getAreaGeometryLayout(spec: z.infer<typeof areaGeometrySchema>): AreaGe
 
     switch (spec.shape) {
         case 'triangle': {
-            const apexX = baseX + width * (spec.apexRatio ?? 0.5);
+            const apexX = baseX + width * apexRatio;
             polygon = [
                 { x: baseX, y: bottomY },
                 { x: baseX + width, y: bottomY },
@@ -753,15 +903,28 @@ function getAreaGeometryLayout(spec: z.infer<typeof areaGeometrySchema>): AreaGe
         }
     }
 
-    if ((spec.shape === 'parallelogram' || spec.shape === 'trapezoid')
-        && (heightFrom.x < baseX || heightFrom.x > baseX + width)) return null;
+    // 上底完全位于底边右侧时，从外侧上顶点画高，避免垂线穿过四边形后标注归属不清。
+    if ((spec.shape === 'parallelogram' || spec.shape === 'trapezoid') && heightFrom.x > baseX + width) {
+        heightFrom.x = polygon[2]!.x;
+        heightTo.x = polygon[2]!.x;
+    }
+    const exteriorHeight = heightFrom.x < baseX || heightFrom.x > baseX + width;
+    const baseLabelPoint = { x: baseX + width / 2, y: bottomY };
+    // 外部高连同完整图形一起居中，只改变画布中的位置，不改变顶点、高或底边的比例。
+    if (exteriorHeight) {
+        const left = Math.min(...polygon.map((point) => point.x), heightFrom.x);
+        const right = Math.max(...polygon.map((point) => point.x), heightFrom.x);
+        const shift = 50 - (left + right) / 2;
+        for (const point of [...polygon, heightFrom, heightTo, baseLabelPoint, ...(topLabelPoint ? [topLabelPoint] : [])]) point.x += shift;
+    }
     const allPoints = [...polygon, heightFrom, heightTo];
     if (allPoints.some((point) => point.x < 0 || point.x > 100 || point.y < 0 || point.y > 100)) return null;
     return {
         polygon,
         heightFrom,
         heightTo,
-        baseLabelPoint: { x: baseX + width / 2, y: bottomY },
+        ...(exteriorHeight ? { baseExtension: { from: heightFrom, to: polygon[heightFrom.x < polygon[0]!.x ? 0 : 1]! } } : {}),
+        baseLabelPoint,
         ...(topLabelPoint ? { topLabelPoint } : {}),
     };
 }
@@ -770,8 +933,45 @@ function validDisplayText(value: string, maxLength: number): boolean {
     return value.length > 0 && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
+/** 只检查可明确识别的可见拉丁点名；说明、隐藏ID和其它记法不推断为同名点。 */
+function hasUniqueVisiblePointNames(points: readonly { label?: string }[]): boolean {
+    const names = new Set<string>();
+    for (const { label } of points) {
+        if (!label || !/^[A-Za-z](?:[0-9]+|[₀-₉]+)?['′″]*$/u.test(label)) continue;
+        if (names.has(label)) return false;
+        names.add(label);
+    }
+    return true;
+}
+
 function validArithmeticToken(value: string): boolean {
     return validDisplayText(value, 18) && /^[0-9a-zA-Z?？_＿□﹖+\-−×xX*/÷=.,，。()（）\s]+$/u.test(value);
+}
+
+const COLUMN_ARITHMETIC_TOKEN = /^[+\-−]?[0-9a-zA-Z?□_]+$/u;
+const DECIMAL_GRID_TOKEN = /^[+\-−]?[0-9?□_]+(?:\.[0-9?□_]+)?$/u;
+const INTEGER_DECIMAL_TOKEN = /^[+\-−]?\d+$/u;
+
+function getDecimalColumnPositions(value: string): number[] | null {
+    if (!DECIMAL_GRID_TOKEN.test(value)) return null;
+    const characters = Array.from(value);
+    const separator = characters.indexOf('.');
+    if (separator < 0) return characters.map((_, index) => index - characters.length);
+    return characters.map((_, index) => index - separator);
+}
+
+function getMultiplicationColumnOffsets(value: string): number[] | null {
+    if (!DECIMAL_GRID_TOKEN.test(value)) return null;
+    const characters = Array.from(value);
+    const columnCount = characters.filter((character) => character !== '.').length;
+    let column = 0;
+    return characters.map((character) => {
+        // 乘法从末位数字对齐，小数点放在相邻数字之间，不额外占一列。
+        if (character === '.') return columnCount - column;
+        const offset = columnCount - column - 0.5;
+        column += 1;
+        return offset;
+    });
 }
 
 /** 校验与绘制共用圆周投影，避免径向误差掩盖重合点或改变直径判定。 */
@@ -795,60 +995,136 @@ function validateFigureSpec(spec: FigureSpec): boolean {
                     && validateFigureSpec(entry.figure));
         }
         case 'vertical_arithmetic': {
+            if (spec.operation !== '÷' && spec.remainder !== undefined) return false;
+            if (spec.operation !== '÷' && spec.divisionSteps.length > 0) return false;
             if (spec.operation === '×') {
                 const shifts = spec.partialProducts.map((partial, index) => partial.shift ?? index);
                 if (new Set(shifts).size !== shifts.length) return false;
                 if (parseIntegerToken(spec.bottom) !== null) {
-                    const digitCount = spec.bottom.replace(/^-/, '').length;
+                    const digitCount = integerDigits(spec.bottom)?.length ?? 0;
                     if (shifts.some((shift) => shift >= digitCount)) return false;
+                } else if (DECIMAL_GRID_TOKEN.test(spec.bottom)) {
+                    const digitCount = displayLength(stripArithmeticSign(spec.bottom).replace('.', ''));
+                    if (shifts.some((shift) => shift >= digitCount)) return false;
+                }
+            }
+            if (spec.operation === '÷') {
+                if (spec.partialProducts.length > 0) return false;
+                const integerDivisionLayout = COLUMN_ARITHMETIC_TOKEN.test(spec.top) && COLUMN_ARITHMETIC_TOKEN.test(spec.bottom);
+                if (!integerDivisionLayout) {
+                    // 小数或复杂表达式继续使用原普通竖式文字布局，不误套整数长除法规则。
+                    if (spec.divisionSteps.length > 0 || spec.remainder !== undefined) return false;
+                } else {
+                    const shifts = spec.divisionSteps.map((step) => step.shift);
+                    if (new Set(shifts).size !== shifts.length
+                        || shifts.some((shift, index) => index > 0 && shift >= shifts[index - 1]!)) return false;
+                    const dividend = parseIntegerToken(spec.top);
+                    const divisor = parseIntegerToken(spec.bottom);
+                    if (dividend !== null && dividend < BigInt(0)) return false;
+                    if (divisor !== null && divisor <= BigInt(0)) return false;
+                    if ((INTEGER_DECIMAL_TOKEN.test(spec.top) && dividend === null)
+                        || (INTEGER_DECIMAL_TOKEN.test(spec.bottom) && divisor === null)) return false;
+                    const dividendDigits = stripArithmeticSign(spec.top);
+                    const dividendDigitCount = dividendDigits.length;
+                    for (const step of spec.divisionSteps) {
+                        const value = parseIntegerToken(step.value);
+                        const subtract = parseIntegerToken(step.subtract);
+                        const availableDigits = dividendDigitCount - step.shift;
+                        if (availableDigits < 1) return false;
+                        if (Array.from(step.value).length > availableDigits || Array.from(step.subtract).length > availableDigits) return false;
+                        if (value !== null && value < BigInt(0)) return false;
+                        if (subtract !== null && subtract < BigInt(0)) return false;
+                    }
+                    if (divisor !== null) {
+                        if (shifts.some((shift) => (shift ?? 0) >= dividendDigitCount)) return false;
+                    }
+                    const remainder = spec.remainder === undefined ? null : parseIntegerToken(spec.remainder);
+                    if (remainder !== null && remainder < BigInt(0)) return false;
+                    if (dividend !== null && divisor !== null && divisor > BigInt(0)) {
+                        const division = divisionProducts(spec.top, spec.bottom);
+                        if (!division) return false;
+                        // 没有步骤时保留“只画题目”的能力；一旦 AI 输出了步骤，就必须覆盖所有非零商位。
+                        if (spec.divisionSteps.length > 0) {
+                            const required = [...division.steps.entries()].filter(([, step]) => step.required).map(([shift]) => shift);
+                            if (required.some((shift) => !shifts.includes(shift))) return false;
+                        }
+                        for (const step of spec.divisionSteps) {
+                            const expected = division.steps.get(step.shift);
+                            if (!expected) return false;
+                            const value = parseIntegerToken(step.value);
+                            const subtract = parseIntegerToken(step.subtract);
+                            // 纯数字步骤是识别结果，不能静默替换成程序计算值；冲突时回退旧图或原图。
+                            if (value !== null && value !== expected.value) return false;
+                            if (subtract !== null && subtract !== expected.subtract) return false;
+                        }
+                    } else if (divisor !== null && divisor > BigInt(0)) {
+                        for (const step of spec.divisionSteps) {
+                            const subtract = parseIntegerToken(step.subtract);
+                            const value = parseIntegerToken(step.value);
+                            if (value !== null && (value < BigInt(0) || value >= divisor * BigInt(10))) return false;
+                            if (subtract !== null && (subtract < BigInt(0) || subtract % divisor !== BigInt(0))) return false;
+                            if (value !== null && subtract !== null && subtract > value) return false;
+                            if (value !== null && subtract !== null
+                                && subtract !== (value / divisor) * divisor) return false;
+                        }
+                        if (!validateUnknownDividendSteps(dividendDigits, spec.divisionSteps, divisor)) return false;
+                    }
+                    if (dividend !== null && divisor !== null
+                        && [spec.result, spec.remainder].some((value) => value !== undefined && /^[+\-−]?\d+\.\d+$/u.test(value))) return false;
                 }
             }
             return validArithmeticToken(spec.top)
                 && validArithmeticToken(spec.bottom)
                 && (!spec.result || validArithmeticToken(spec.result))
+                && (!spec.remainder || validArithmeticToken(spec.remainder))
                 && spec.partialProducts.every((partial) => validArithmeticToken(partial.value)
                     && (!partial.label || validDisplayText(partial.label, 12)))
+                && spec.divisionSteps.every((step) => validArithmeticToken(step.value)
+                    && validArithmeticToken(step.subtract)
+                    && (!step.label || validDisplayText(step.label, 12)))
                 && (!spec.note || validDisplayText(spec.note, 60));
         }
         case 'fraction': {
             if (!validDisplayText(spec.numerator, 18) || !validDisplayText(spec.denominator, 18)) return false;
             if (spec.whole && !validDisplayText(spec.whole, 12)) return false;
             if (spec.label && !validDisplayText(spec.label, 60)) return false;
-            const numerator = parseIntegerToken(spec.numerator);
-            const denominator = parseIntegerToken(spec.denominator);
-            if (denominator !== null && denominator === BigInt(0)) return false;
             if (spec.model === 'bar' || spec.model === 'circle') {
                 const maximumParts = spec.model === 'bar' ? 40 : 24;
                 if (!spec.parts || spec.parts > maximumParts || spec.filled === undefined) return false;
-                if (denominator !== null && denominator !== BigInt(spec.parts)) return false;
-                if (numerator !== null && numerator !== BigInt(spec.filled)) return false;
+                const numerator = parseNonNegativeFractionInteger(spec.numerator);
+                const denominator = parseNonNegativeFractionInteger(spec.denominator);
+                if (numerator === null || denominator === null || denominator === BigInt(0)) return false;
+                if (denominator !== BigInt(spec.parts) || numerator !== BigInt(spec.filled)) return false;
                 if (spec.whole) {
                     const whole = parseIntegerToken(spec.whole);
                     if (whole === null || spec.whole.startsWith('-') || whole < BigInt(0) || whole > BigInt(MAX_FRACTION_WHOLES)) return false;
                 }
+            } else if (parseIntegerToken(spec.denominator) === BigInt(0)) {
+                return false;
             }
             return spec.filled === undefined || spec.parts === undefined || spec.filled <= spec.parts;
         }
         case 'number_line': {
-            const tickCount = Math.floor((spec.max - spec.min) / spec.step) + 1;
-            return tickCount <= 25
+            return createFigureAxisTicks(spec.min, spec.max, spec.step) !== null
+                && hasUniqueVisiblePointNames(spec.points)
                 && spec.points.every((point) => point.value >= spec.min && point.value <= spec.max && (!point.label || validDisplayText(point.label, 30)))
                 && (!spec.label || validDisplayText(spec.label, 60));
         }
         case 'coordinate_plane': {
-            const xTicks = Math.floor((spec.xMax - spec.xMin) / spec.xStep) + 1;
-            const yTicks = Math.floor((spec.yMax - spec.yMin) / spec.yStep) + 1;
             const ids = new Set(spec.points.map((point) => point.id));
-            return xTicks <= 25
-                && yTicks <= 25
+            return createFigureAxisTicks(spec.xMin, spec.xMax, spec.xStep) !== null
+                && createFigureAxisTicks(spec.yMin, spec.yMax, spec.yStep) !== null
                 && ids.size === spec.points.length
+                && hasUniqueVisiblePointNames(spec.points)
                 && spec.points.every((point) => point.x >= spec.xMin && point.x <= spec.xMax && point.y >= spec.yMin && point.y <= spec.yMax && (!point.label || validDisplayText(point.label, 24)))
+                && !hasConflictingDuplicateUndirectedSegments(spec.segments)
                 && spec.segments.every((segment) => ids.has(segment.from) && ids.has(segment.to) && (!segment.label || validDisplayText(segment.label, 32)))
                 && spec.labels.every((label) => label.x >= spec.xMin && label.x <= spec.xMax && label.y >= spec.yMin && label.y <= spec.yMax && validDisplayText(label.text, 50))
                 && (!spec.title || validDisplayText(spec.title, 60));
         }
         case 'circle_geometry': {
             const center = spec.center;
+            if (!hasUniqueVisiblePointNames([center, ...spec.points])) return false;
             const points = new Map(spec.points.map((point) => [point.id, point]));
             const allPoints = new Map([[center.id, center], ...spec.points.map((point) => [point.id, point] as const)]);
             const tolerance = Math.max(0.5, spec.radius * 0.03);
@@ -923,9 +1199,18 @@ function validateFigureSpec(spec: FigureSpec): boolean {
                 && (!spec.heightLabel || validDisplayText(spec.heightLabel, 30))
                 && validateFigureLengths([{ label: spec.widthLabel }, { label: spec.depthLabel }, { label: spec.heightLabel }], spec.shape === 'cube')
                 && (!spec.title || validDisplayText(spec.title, 60));
+        case 'round_solid':
+            return [spec.radiusLabel, spec.diameterLabel, spec.heightLabel, spec.slantLabel].every((label) => !label || validDisplayText(label, 30))
+                && validateRoundSolidLengths(spec)
+                && (!spec.title || validDisplayText(spec.title, 60));
+        case 'sphere_geometry':
+            return [spec.radiusLabel, spec.diameterLabel].every((label) => !label || validDisplayText(label, 30))
+                && validateSphereLengths(spec)
+                && (!spec.title || validDisplayText(spec.title, 60));
         case 'basic_geometry': {
             const ids = new Set(spec.points.map((point) => point.id));
             if (ids.size !== spec.points.length) return false;
+            if (!hasUniqueVisiblePointNames(spec.points)) return false;
             const coordinates = new Set<string>();
             for (const point of spec.points) {
                 const coordinateKey = `${point.x},${point.y}`;
@@ -937,6 +1222,7 @@ function validateFigureSpec(spec: FigureSpec): boolean {
             if (spec.angles.some((angle) => angle.label && !validDisplayText(angle.label, 30))) return false;
             if (spec.angles.some((angle) => angle.style === 'right' && !validateRightAngleLabel(angle.label))) return false;
             if (spec.segments.some((segment) => segment.from === segment.to)) return false;
+            if (hasConflictingDuplicateUndirectedSegments(spec.segments)) return false;
             if (spec.polygons.some((polygon) => {
                 if (new Set(polygon.points).size !== polygon.points.length) return true;
                 const points = polygon.points.map((id) => spec.points.find((point) => point.id === id));
@@ -968,6 +1254,7 @@ function validateFigureSpec(spec: FigureSpec): boolean {
         case 'line_chart':
             return (spec.maxValue === undefined || spec.maxValue >= Math.max(...spec.values))
                 && (spec.minValue === undefined || spec.minValue <= Math.min(...spec.values))
+                && getFigureChartDomain(spec) !== null
                 && (!spec.unit || validDisplayText(spec.unit, 16))
                 && (!spec.title || validDisplayText(spec.title, 60));
         case 'grid_shape': {
@@ -1055,6 +1342,7 @@ type FigureTextOptions = {
     size?: number; maxWidth?: number; anchor?: 'start' | 'middle' | 'end'; color?: string; weight?: string;
     pointLabel?: FigurePoint; segmentLabel?: { from: FigurePoint; to: FigurePoint }; angularLabel?: FigureAngularLabel;
     fixedLabel?: FigurePoint; circleLabel?: FigureCircleLabel; title?: boolean; lineGap?: number;
+    arithmeticRow?: string; arithmeticShift?: number;
 };
 
 function text(x: number, y: number, value: string, options: FigureTextOptions = {}): string {
@@ -1062,21 +1350,28 @@ function text(x: number, y: number, value: string, options: FigureTextOptions = 
     const anchor = options.anchor ?? 'middle';
     const color = options.color ?? COLORS.black;
     const weight = options.weight ? ` font-weight="${escapeXml(options.weight)}"` : '';
-    let marker = options.pointLabel ? ` data-figure-label="point" data-point-x="${finite(options.pointLabel.x)}" data-point-y="${finite(options.pointLabel.y)}"` : '';
+    const labelKind = options.fixedLabel ? 'fixed'
+        : options.segmentLabel ? 'segment'
+        : options.angularLabel?.kind
+        ?? (options.circleLabel ? 'circle' : options.pointLabel ? 'point' : undefined);
+    let marker = labelKind ? ` data-figure-label="${labelKind}"` : '';
+    if (options.pointLabel) marker += ` data-point-x="${finite(options.pointLabel.x)}" data-point-y="${finite(options.pointLabel.y)}"`;
     if (options.segmentLabel) {
         const { from, to } = options.segmentLabel;
-        marker = ` data-figure-label="segment" data-from-x="${finite(from.x)}" data-from-y="${finite(from.y)}" data-to-x="${finite(to.x)}" data-to-y="${finite(to.y)}"`;
+        marker += ` data-from-x="${finite(from.x)}" data-from-y="${finite(from.y)}" data-to-x="${finite(to.x)}" data-to-y="${finite(to.y)}"`;
     }
     if (options.angularLabel) {
         const label = options.angularLabel;
-        marker = ` data-figure-label="${label.kind}" data-center-x="${finite(label.center.x)}" data-center-y="${finite(label.center.y)}" data-angle-start="${finite(label.start)}" data-angle-delta="${finite(label.delta)}" data-region-inner="${finite(label.innerRadius)}" data-region-outer="${finite(label.outerRadius)}"`;
+        marker += ` data-center-x="${finite(label.center.x)}" data-center-y="${finite(label.center.y)}" data-angle-start="${finite(label.start)}" data-angle-delta="${finite(label.delta)}" data-region-inner="${finite(label.innerRadius)}" data-region-outer="${finite(label.outerRadius)}"`;
     }
-    if (options.fixedLabel) marker = ` data-figure-label="fixed" data-anchor-x="${finite(options.fixedLabel.x)}" data-anchor-y="${finite(options.fixedLabel.y)}"`;
+    if (options.fixedLabel) marker += ` data-anchor-x="${finite(options.fixedLabel.x)}" data-anchor-y="${finite(options.fixedLabel.y)}"`;
     if (options.circleLabel) {
         const label = options.circleLabel;
-        marker = ` data-figure-label="circle" data-center-x="${finite(label.center.x)}" data-center-y="${finite(label.center.y)}" data-region-radius="${finite(label.radius)}"`;
+        marker += ` data-center-x="${finite(label.center.x)}" data-center-y="${finite(label.center.y)}" data-region-radius="${finite(label.radius)}"`;
     }
     if (options.title) marker += ' data-figure-title="true"';
+    if (options.arithmeticRow) marker += ` data-arithmetic-row="${escapeXml(options.arithmeticRow)}"`;
+    if (options.arithmeticShift !== undefined) marker += ` data-arithmetic-shift="${finite(options.arithmeticShift)}"`;
     return `<text x="${finite(x)}" y="${finite(y)}" text-anchor="${anchor}" font-size="${size}" fill="${color}"${weight}${marker}>${escapeXml(value)}</text>`;
 }
 
@@ -1149,7 +1444,7 @@ function renderGeometryTitle(value: string, body: FigureLabelBox, placement: 'ab
     return null;
 }
 
-function createGeometryLabelLayout(minimumFontSize = 8) {
+function createGeometryLabelLayout(minimumFontSize = 12) {
     const obstacles: FigureLabelObstacle[] = [];
     const segmentLabels: Array<FigureSegmentLabel & { value: string; options: FigureTextOptions; size: number }> = [];
     const angularLabels: Array<FigureAngularLabel & { value: string; options: FigureTextOptions; size: number }> = [];
@@ -1299,6 +1594,15 @@ function hasInvalidSvgNumber(svg: string): boolean {
         || /(?:x|y|x1|y1|x2|y2|cx|cy|r|width|height|font-size)="-?(?:\d+(?:\.\d+)?|\.\d+)e[+-]?\d+"/i.test(svg);
 }
 
+/** 最终输出层再检查一次，防止新增模板漏掉局部字号保护。 */
+function hasUnreadableSvgText(svg: string): boolean {
+    for (const match of svg.matchAll(/\sfont-size="([\d.]+)"/g)) {
+        const size = Number(match[1]);
+        if (!Number.isFinite(size) || size < 12) return true;
+    }
+    return false;
+}
+
 function hasOutOfBoundsSvgGeometry(svg: string): boolean {
     const numericAttributes = /(?:x|y|x1|y1|x2|y2|cx|cy|r|width|height)="(-?(?:\d+(?:\.\d+)?|\.\d+))"/gi;
     for (const match of svg.matchAll(numericAttributes)) {
@@ -1332,23 +1636,22 @@ function renderCoordinatePlane(spec: z.infer<typeof coordinatePlaneSchema>): Fig
     const bottom = top + height;
     const mapX = (value: number) => left + ((value - spec.xMin) / xRange) * (right - left);
     const mapY = (value: number) => bottom - ((value - spec.yMin) / yRange) * (bottom - top);
-    const xTicks = Math.floor((spec.xMax - spec.xMin) / spec.xStep) + 1;
-    const yTicks = Math.floor((spec.yMax - spec.yMin) / spec.yStep) + 1;
-    if ((xTicks > 1 && spec.xStep * unitScale < 22) || (yTicks > 1 && spec.yStep * unitScale < 18)) return null;
+    const xTicks = createFigureAxisTicks(spec.xMin, spec.xMax, spec.xStep);
+    const yTicks = createFigureAxisTicks(spec.yMin, spec.yMax, spec.yStep);
+    if (!xTicks || !yTicks) return null;
+    if ((xTicks.length > 1 && spec.xStep * unitScale < 22) || (yTicks.length > 1 && spec.yStep * unitScale < 18)) return null;
+    const xAxisIncludesZero = xTicks.some(({ value }) => value === 0);
 
-    for (let index = 0; index < xTicks; index += 1) {
-        const value = spec.xMin + index * spec.xStep;
-        if (value > spec.xMax + spec.xStep / 100) break;
+    for (const { value, label } of xTicks) {
         const x = mapX(value);
         content.push(line(x, top, x, bottom, { color: COLORS.gray, width: 1 }));
-        content.push(labels.text(x, bottom + 30, Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4))), { size: 15, maxWidth: 48 }));
+        content.push(labels.text(x, bottom + 30, label, { size: 15, maxWidth: 48 }));
     }
-    for (let index = 0; index < yTicks; index += 1) {
-        const value = spec.yMin + index * spec.yStep;
-        if (value > spec.yMax + spec.yStep / 100) break;
+    for (const { value, label } of yTicks) {
         const y = mapY(value);
         content.push(line(left, y, right, y, { color: COLORS.gray, width: 1 }));
-        if (Math.abs(value) > spec.yStep / 100) content.push(labels.text(left - 18, y + 5, Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4))), { size: 15, maxWidth: 42, anchor: 'end' }));
+        // 仅在横轴已标出原点时隐藏纵轴的重复零标签。
+        if (value !== 0 || !xAxisIncludesZero) content.push(labels.text(left - 18, y + 5, label, { size: 15, maxWidth: 42, anchor: 'end' }));
     }
 
     const axisX = spec.xMin <= 0 && spec.xMax >= 0 ? mapX(0) : left;
@@ -1381,57 +1684,6 @@ function renderCoordinatePlane(spec: z.infer<typeof coordinatePlaneSchema>): Fig
     content.push(renderedLabels.svg);
     if (separateTitle) return renderGeometryWithHeading(content.join(''), renderedLabels.viewport, separateTitle);
     return root(content.join(''), 500, renderedLabels.viewport);
-}
-
-function normalizeAngleDelta(value: number): number {
-    let delta = value;
-    while (delta <= -Math.PI) delta += Math.PI * 2;
-    while (delta > Math.PI) delta -= Math.PI * 2;
-    return delta;
-}
-
-const FULL_TURN = Math.PI * 2;
-const ARC_EPSILON = 0.0001;
-const ARC_AMBIGUITY_TOLERANCE = Math.PI / 180;
-
-function positiveAngleDelta(value: number): number {
-    return ((value % FULL_TURN) + FULL_TURN) % FULL_TURN;
-}
-
-function resolveCircleArcDelta(
-    center: { x: number; y: number },
-    from: { x: number; y: number },
-    to: { x: number; y: number },
-    selection: { arcType?: 'minor' | 'major'; through?: { x: number; y: number } },
-): number | null {
-    const startAngle = Math.atan2(from.y - center.y, from.x - center.x);
-    const endAngle = Math.atan2(to.y - center.y, to.x - center.x);
-    const positiveEnd = positiveAngleDelta(endAngle - startAngle);
-    if (positiveEnd < ARC_AMBIGUITY_TOLERANCE || FULL_TURN - positiveEnd < ARC_AMBIGUITY_TOLERANCE) return null;
-
-    const minorDelta = normalizeAngleDelta(endAngle - startAngle);
-    const nearSemicircle = Math.abs(positiveEnd - Math.PI) <= ARC_AMBIGUITY_TOLERANCE;
-    if (nearSemicircle && !selection.through) return null;
-
-    let delta = minorDelta;
-    if (selection.through) {
-        const throughAngle = Math.atan2(selection.through.y - center.y, selection.through.x - center.x);
-        const positiveThrough = positiveAngleDelta(throughAngle - startAngle);
-        if (Math.abs(normalizeAngleDelta(throughAngle - startAngle)) < ARC_AMBIGUITY_TOLERANCE
-            || Math.abs(normalizeAngleDelta(throughAngle - endAngle)) < ARC_AMBIGUITY_TOLERANCE) return null;
-        delta = positiveThrough < positiveEnd ? positiveEnd : positiveEnd - FULL_TURN;
-    } else if (selection.arcType === 'major') {
-        delta = minorDelta > 0 ? minorDelta - FULL_TURN : minorDelta + FULL_TURN;
-    }
-    if (nearSemicircle && selection.arcType) return null;
-
-    const arcSize = Math.abs(delta);
-    if (Math.abs(arcSize - Math.PI) <= ARC_EPSILON) return selection.arcType ? null : delta;
-
-    const isMajor = arcSize > Math.PI + ARC_EPSILON;
-    if (selection.arcType === 'major' && !isMajor) return null;
-    if (selection.arcType === 'minor' && isMajor) return null;
-    return delta;
 }
 
 function renderCircleGeometry(spec: z.infer<typeof circleGeometrySchema>): FigureDrawing | null {
@@ -1564,20 +1816,25 @@ function renderAreaGeometry(spec: z.infer<typeof areaGeometrySchema>): FigureDra
         const next = polygon[(index + 1) % polygon.length];
         content.push(labels.line(point.x, point.y, next.x, next.y));
     });
+    if (layout.baseExtension) {
+        const from = map(layout.baseExtension.from);
+        const to = map(layout.baseExtension.to);
+        content.push(`<g data-area-part="base-extension">${labels.line(from.x, from.y, to.x, to.y, { dashed: true, width: 1.8 })}</g>`);
+    }
     // 顶点落在底边端点时，高本身就是三角形外边；保留外边实线，避免再叠画一条虚线。
     const heightIsBoundary = spec.shape === 'triangle' && (spec.apexRatio === 0 || spec.apexRatio === 1);
-    if (!heightIsBoundary) content.push(labels.line(heightFrom.x, heightFrom.y, heightTo.x, heightTo.y, { dashed: true, width: 1.8 }));
+    if (!heightIsBoundary) content.push(`<g data-area-part="height">${labels.line(heightFrom.x, heightFrom.y, heightTo.x, heightTo.y, { dashed: true, width: 1.8 })}</g>`);
     if (Math.abs(heightFrom.y - heightTo.y) >= 18) {
-        const baseLeft = polygon[0]!.x;
-        const baseRight = polygon[1]!.x;
+        const baseLeft = Math.min(polygon[0]!.x, heightFrom.x);
+        const baseRight = Math.max(polygon[1]!.x, heightFrom.x);
         const direction = heightFrom.x + 10 <= baseRight ? 1 : -1;
         const markSize = Math.min(10, Math.abs(heightFrom.y - heightTo.y) * 0.22);
         const markX = heightFrom.x + direction * markSize;
         const markY = heightFrom.y - markSize;
-        content.push(path(
+        content.push(`<g data-area-part="right-angle">${path(
             `M ${finite(heightFrom.x)} ${finite(markY)} L ${finite(markX)} ${finite(markY)} L ${finite(markX)} ${finite(heightFrom.y)}`,
             { width: 1.6 },
-        ));
+        )}</g>`);
         labels.segment({ x: heightFrom.x, y: markY }, { x: markX, y: markY });
         labels.segment({ x: markX, y: markY }, { x: markX, y: heightFrom.y });
         if (markX < baseLeft - 0.5 || markX > baseRight + 0.5) return null;
@@ -1656,6 +1913,202 @@ function renderSolidGeometry(spec: z.infer<typeof solidGeometrySchema>): FigureD
     return root(content.join(''), 500, renderedLabels.viewport);
 }
 
+function renderRoundSolid(spec: RoundSolidSpec): FigureDrawing | null {
+    const projection = projectRoundSolid(spec);
+    if (!projection) return null;
+    const { center, top, rx, ry, left, right, tangentAngle } = projection;
+    const labels = createGeometryLabelLayout(12);
+    const content: string[] = [];
+    const point = (value: FigurePoint) => `${finite(value.x)} ${finite(value.y)}`;
+    const fill = spec.fill === 'gray' ? COLORS.gray : spec.fill === 'lightblue' ? COLORS.lightBlue : '#fff';
+    const part = (name: string, svg: string) => `<g data-round-solid-part="${name}">${svg}</g>`;
+    const arc = (origin: FigurePoint, start: number, delta: number, dashed = false) => {
+        const at = (angle: number) => ({ x: origin.x + rx * Math.cos(angle), y: origin.y + ry * Math.sin(angle) });
+        // 弧段与实际路径共同登记，曲线不能从文字避让和画布边界检查中漏掉。
+        const count = Math.ceil(Math.abs(delta) / (Math.PI / 36));
+        for (let index = 0; index < count; index++) labels.segment(at(start + delta * index / count), at(start + delta * (index + 1) / count));
+        return path(`M ${point(at(start))} A ${finite(rx)} ${finite(ry)} 0 ${Math.abs(delta) > Math.PI ? 1 : 0} ${delta > 0 ? 1 : 0} ${point(at(start + delta))}`, { dashed });
+    };
+    if (spec.shape === 'cylinder') {
+        content.push(part('body', path(`M ${finite(center.x - rx)} ${finite(top.y)} L ${point(left)} A ${finite(rx)} ${finite(ry)} 0 0 0 ${point(right)} L ${finite(center.x + rx)} ${finite(top.y)} Z`, { fill, width: 0 })));
+        const topFill = spec.fill === 'gray' ? '#f3f4f6' : spec.fill === 'lightblue' ? '#eff6ff' : '#fff';
+        content.push(part('top-face', path(`M ${finite(center.x - rx)} ${finite(top.y)} A ${finite(rx)} ${finite(ry)} 0 0 1 ${finite(center.x + rx)} ${finite(top.y)} A ${finite(rx)} ${finite(ry)} 0 0 1 ${finite(center.x - rx)} ${finite(top.y)} Z`, { fill: topFill, width: 0 })));
+        content.push(part('left-edge', labels.line(center.x - rx, top.y, left.x, left.y)));
+        content.push(part('right-edge', labels.line(center.x + rx, top.y, right.x, right.y)));
+        content.push(part('top-back', arc(top, Math.PI, Math.PI)));
+        content.push(part('top-front', arc(top, Math.PI, -Math.PI)));
+    } else {
+        content.push(part('body', path(`M ${point(top)} L ${point(left)} A ${finite(rx)} ${finite(ry)} 0 1 0 ${point(right)} Z`, { fill, width: 0 })));
+        content.push(part('left-edge', labels.line(top.x, top.y, left.x, left.y)));
+        content.push(part('right-edge', labels.line(top.x, top.y, right.x, right.y)));
+        content.push(part('axis', labels.line(top.x, top.y, center.x, center.y, { dashed: true, width: 1.6 })));
+        content.push(part('base-radius', labels.line(center.x, center.y, center.x + rx, center.y, { dashed: true, width: 1.6 })));
+        const mark = Math.min(10, ry / 2);
+        content.push(part('right-angle', path(`M ${finite(center.x)} ${finite(center.y - mark)} L ${finite(center.x + mark)} ${finite(center.y - mark)} L ${finite(center.x + mark)} ${finite(center.y)}`, { width: 1.5 })));
+        labels.segment({ x: center.x, y: center.y - mark }, { x: center.x + mark, y: center.y - mark });
+        labels.segment({ x: center.x + mark, y: center.y - mark }, { x: center.x + mark, y: center.y });
+        if (spec.slantLabel) labels.segmentLabel(top, right, spec.slantLabel, { size: 18, maxWidth: 140 }, { x: 1, y: -1 });
+    }
+    const backStart = -Math.PI + tangentAngle;
+    content.push(part('base-back', arc(center, backStart, Math.PI - 2 * tangentAngle, true)));
+    content.push(part('base-front', arc(center, backStart, -Math.PI - 2 * tangentAngle)));
+
+    // 半径、直径和高使用各自的尺寸线，避免把椭圆弧或圆锥斜边当成目标长度。
+    const extension = (from: FigurePoint, to: FigurePoint) => labels.line(from.x, from.y, to.x, to.y, { dashed: true, width: 1, color: '#6b7280' });
+    if (spec.heightLabel) {
+        const x = center.x - rx - 36;
+        const from = { x, y: top.y };
+        const to = { x, y: center.y };
+        content.push(part('height', labels.line(from.x, from.y, to.x, to.y)
+            + extension({ x: spec.shape === 'cone' ? top.x : center.x - rx, y: top.y }, { x: x - 4, y: top.y })
+            + extension({ x: spec.shape === 'cone' ? center.x : center.x - rx, y: center.y }, { x: x - 4, y: center.y })));
+        labels.segmentLabel(from, to, spec.heightLabel, { size: 18, maxWidth: 120 }, { x: -1, y: 0 });
+    }
+    const dimensions = [
+        { name: 'radius', value: spec.radiusLabel, from: center.x, y: center.y + ry + 28 },
+        { name: 'diameter', value: spec.diameterLabel, from: center.x - rx, y: center.y + ry + (spec.radiusLabel ? 94 : 28) },
+    ];
+    for (const dimension of dimensions) {
+        if (!dimension.value) continue;
+        const from = { x: dimension.from, y: dimension.y };
+        const to = { x: center.x + rx, y: dimension.y };
+        content.push(part(dimension.name, labels.line(from.x, from.y, to.x, to.y)
+            + extension({ x: from.x, y: center.y }, { x: from.x, y: dimension.y + 4 })
+            + extension({ x: to.x, y: center.y }, { x: to.x, y: dimension.y + 4 })));
+        labels.segmentLabel(from, to, dimension.value, { size: 18, maxWidth: 140 }, { x: 0, y: 1 });
+    }
+    if (spec.title) labels.title(spec.title);
+    const rendered = labels.renderLabels([], { size: 18, maxWidth: 140, radius: 0 });
+    if (!rendered) return null;
+    return root(content.join('') + rendered.svg, 500, rendered.viewport);
+}
+
+function renderSphere(spec: SphereGeometrySpec): FigureDrawing | null {
+    const center = { x: 400, y: 215 };
+    const radius = 120;
+    const labels = createGeometryLabelLayout(12);
+    const part = (name: string, svg: string) => `<g data-sphere-part="${name}">${svg}</g>`;
+    const fill = spec.fill === 'gray' ? COLORS.gray : spec.fill === 'lightblue' ? COLORS.lightBlue : '#fff';
+    const content = [part('outline', `<circle cx="${center.x}" cy="${center.y}" r="${radius}" fill="${fill}" stroke="${COLORS.black}" stroke-width="2"/>`)];
+    labels.circle(center, radius);
+    for (const [name, direction] of [['equator-front', 1], ['equator-back', -1]] as const) {
+        const ry = radius * 0.3;
+        for (let index = 0; index < 36; index++) {
+            const at = (step: number) => ({ x: center.x + radius * Math.cos(Math.PI * step / 36), y: center.y + ry * Math.sin(Math.PI * step / 36) * direction });
+            labels.segment(at(index), at(index + 1));
+        }
+        content.push(part(name, path(`M ${center.x + radius} ${center.y} A ${radius} ${ry} 0 0 ${direction === 1 ? 1 : 0} ${center.x - radius} ${center.y}`, { dashed: direction === -1 })));
+    }
+    const dimensions = [
+        { name: 'radius', value: spec.radiusLabel, from: center.x, y: center.y + radius + 28 },
+        { name: 'diameter', value: spec.diameterLabel, from: center.x - radius, y: center.y + radius + (spec.radiusLabel ? 94 : 28) },
+    ];
+    for (const dimension of dimensions) {
+        if (!dimension.value) continue;
+        const from = { x: dimension.from, y: dimension.y };
+        const to = { x: center.x + radius, y: dimension.y };
+        const extension = (x: number) => labels.line(x, center.y, x, dimension.y + 4, { dashed: true, width: 1, color: '#6b7280' });
+        content.push(part(dimension.name, labels.line(from.x, from.y, to.x, to.y) + extension(from.x) + extension(to.x)));
+        // 球体的半径尺寸线只有 120px，长英文、分数和单位标签无法稳定放在线段中。
+        // 标签固定放在线下方，尺寸线仍保留原始端点，避免改变图形比例或把标签挤出画布。
+        const labelX = center.x;
+        const labelY = dimension.y + 32;
+        const labelSize = fitFontSize(dimension.value, 18, 220);
+        content.push(labels.text(labelX, labelY, dimension.value, {
+            size: labelSize,
+            maxWidth: 220,
+            fixedLabel: { x: labelX, y: labelY },
+            segmentLabel: { from, to },
+        }));
+    }
+    if (spec.title) labels.title(spec.title);
+    const rendered = labels.renderLabels([], { size: 18, maxWidth: 140, radius: 0 });
+    if (!rendered) return null;
+    return root(content.join('') + rendered.svg, 500, rendered.viewport);
+}
+
+function renderVerticalDivision(spec: z.infer<typeof verticalArithmeticSchema>): FigureDrawing | null {
+    const content: string[] = [];
+    const size = 28;
+    const cell = 30;
+    const padding = 12;
+    const rowGap = 42;
+    const labelSize = 18;
+    const isColumnToken = (value: string) => COLUMN_ARITHMETIC_TOKEN.test(value);
+    const numberWidth = (value: string) => isColumnToken(value) ? displayLength(value) * cell : displayWidth(value) * size + 8;
+    const values = [
+        { value: spec.top, shift: 0 },
+        { value: spec.bottom, shift: 0 },
+        ...spec.divisionSteps.flatMap((step) => [
+            { value: step.value, shift: step.shift }, { value: step.subtract, shift: step.shift },
+        ]),
+        ...(spec.result ? [{ value: spec.result, shift: 0 }] : []),
+        ...(spec.remainder ? [{ value: spec.remainder, shift: 0 }] : []),
+    ];
+    const numberSpan = Math.max(...values.map(({ value, shift }) => numberWidth(value) + shift * cell),
+        ...(spec.remainder ? [displayWidth(`余数 ${spec.remainder}`) * 20 + 8] : []));
+    const labelWidth = Math.max(0, ...spec.divisionSteps.map((step) => displayWidth(step.label ?? '') * labelSize));
+    const labelColumn = Math.max(32, labelWidth ? labelWidth + 16 : 0);
+    const divisorWidth = numberWidth(spec.bottom);
+    const numberLeft = padding + labelColumn + divisorWidth + 34;
+    const right = numberLeft + numberSpan;
+    const width = Math.max(240, right + padding);
+    if (width > 800) return null;
+    const drawNumber = (value: string, y: number, role: string, shift = 0, rightEdge = right) => {
+        // 每个数位使用独立文字锚点，长除法的商、被除数和减数保持同一列网格。
+        const columns = isColumnToken(value);
+        const unitX = rightEdge - cell / 2;
+        const positions = columns
+            ? Array.from(value, (_, index) => unitX - (displayLength(value) - 1 - index + shift) * cell).join(' ')
+            : String(rightEdge - shift * cell);
+        content.push(`<text x="${positions}" y="${y}" text-anchor="${columns ? 'middle' : 'end'}" font-size="${size}" fill="${COLORS.black}" data-arithmetic-row="${role}" data-arithmetic-shift="${shift}">${escapeXml(value)}</text>`);
+    };
+
+    const start = padding + size * 1.2;
+    if (spec.result) drawNumber(spec.result, start, 'division-quotient');
+    const dividendY = start + rowGap;
+    drawNumber(spec.bottom, dividendY, 'division-divisor', 0, numberLeft - 16);
+    drawNumber(spec.top, dividendY, 'division-dividend');
+    const bracketX = numberLeft - 2;
+    const bracketTop = dividendY - size - 8;
+    content.push(`<path d="M ${bracketX} ${bracketTop} Q ${bracketX - 14} ${bracketTop + 12} ${bracketX} ${bracketTop + 25}" fill="none" stroke="${COLORS.black}" stroke-width="2.5"/>`);
+    content.push(line(bracketX, bracketTop, right, bracketTop, { width: 2.5 }));
+
+    let lastRow = dividendY + 46;
+    for (const [index, step] of spec.divisionSteps.entries()) {
+        if (index > 0) lastRow += rowGap;
+        if (step.label) content.push(text(padding + labelColumn, lastRow, step.label, { size: labelSize, anchor: 'end', weight: '600' }));
+        drawNumber(step.value, lastRow, 'division-value', step.shift);
+        const subtractY = lastRow + rowGap;
+        drawNumber(step.subtract, subtractY, 'division-subtract', step.shift);
+        content.push(line(numberLeft, subtractY + 14, right - step.shift * cell, subtractY + 14, { width: 1.8 }));
+        lastRow = subtractY + 18;
+    }
+    if (spec.remainder) {
+        lastRow += spec.divisionSteps.length > 0 ? 24 : 42;
+        content.push(text(numberLeft, lastRow, `余数 ${spec.remainder}`, {
+            size: 20, maxWidth: right - numberLeft, anchor: 'start', arithmeticRow: 'division-remainder', arithmeticShift: 0,
+        }));
+    }
+
+    let bottom = Math.max(lastRow + size * 0.4, dividendY + 18);
+    if (spec.note) {
+        let note: { size: number; lines: string[] } | undefined;
+        for (let noteSize = 18; noteSize >= 12; noteSize -= 1) {
+            const lines = wrapTextLines(spec.note, noteSize, width - padding * 2);
+            if (wrappedLinesFit(lines, noteSize, width - padding * 2)) { note = { size: noteSize, lines }; break; }
+        }
+        if (!note) return null;
+        const top = bottom + 16;
+        const lineGap = note.size * 1.35;
+        content.push(textWithLineWrap(width / 2, top + note.size * 1.2, spec.note, { size: note.size, maxWidth: width - padding * 2, lineGap }));
+        bottom = top + note.size * 1.6 + (note.lines.length - 1) * lineGap;
+    }
+    const height = Math.ceil(bottom + padding);
+    if (height > 800) return null;
+    return root(content.join(''), height, { left: 0, top: 0, width, height });
+}
+
 function renderVerticalArithmetic(spec: z.infer<typeof verticalArithmeticSchema>): FigureDrawing | null {
     const content: string[] = [];
     const size = 28;
@@ -1670,7 +2123,23 @@ function renderVerticalArithmetic(spec: z.infer<typeof verticalArithmeticSchema>
         ...spec.partialProducts.map((partial) => ({ value: partial.value, shift: partial.shift ?? 0 })),
         ...(spec.result ? [{ value: spec.result, shift: 0 }] : []),
     ];
-    const numberSpan = Math.max(...values.map(({ value, shift }) => numberWidth(value) + shift * cell));
+    const useDecimalGrid = (spec.operation === '+' || spec.operation === '-')
+        && spec.partialProducts.length === 0
+        && values.some(({ value }) => value.includes('.'))
+        && values.every(({ value }) => DECIMAL_GRID_TOKEN.test(value));
+    const useMultiplicationGrid = spec.operation === '×'
+        && values.some(({ value }) => value.includes('.'))
+        && values.every(({ value }) => DECIMAL_GRID_TOKEN.test(value));
+    const decimalColumns = useDecimalGrid
+        ? values.map(({ value, shift }) => (getDecimalColumnPositions(value) ?? []).map((column) => column - shift))
+        : [];
+    const decimalMin = useDecimalGrid ? Math.min(...decimalColumns.flat()) : 0;
+    const decimalMax = useDecimalGrid ? Math.max(...decimalColumns.flat()) : 0;
+    const numberSpan = useDecimalGrid
+        ? (decimalMax - decimalMin + 1) * cell
+        : useMultiplicationGrid
+            ? Math.max(...values.map(({ value, shift }) => displayLength(value.replace('.', '')) + shift)) * cell
+        : Math.max(...values.map(({ value, shift }) => numberWidth(value) + shift * cell));
     const labelWidth = Math.max(0, ...spec.partialProducts.map((partial) => displayWidth(partial.label ?? '') * labelSize));
     const labelColumn = Math.max(32, labelWidth ? labelWidth + 16 : 0);
     const bodyWidth = padding * 2 + labelColumn + numberSpan;
@@ -1679,11 +2148,16 @@ function renderVerticalArithmetic(spec: z.infer<typeof verticalArithmeticSchema>
     const numberLeft = padding + labelColumn + (width - bodyWidth) / 2;
     const right = numberLeft + numberSpan;
     const unitX = right - cell / 2;
+    const decimalX = useDecimalGrid ? right - (decimalMax + 0.5) * cell : 0;
     const drawNumber = (value: string, y: number, role: string, shift = 0) => {
         // 每个数位使用独立文字锚点，数字、字母和方框的字体宽度不会改变列对齐。
-        const columns = isColumnToken(value);
-        const positions = columns
-            ? Array.from(value, (_, index) => unitX - (displayLength(value) - 1 - index + shift) * cell).join(' ')
+        const columns = useDecimalGrid || useMultiplicationGrid || isColumnToken(value);
+        const positions = useDecimalGrid
+            ? (getDecimalColumnPositions(value) ?? []).map((column) => decimalX + (column - shift) * cell).join(' ')
+            : useMultiplicationGrid
+                ? (getMultiplicationColumnOffsets(value) ?? []).map((offset) => right - (offset + shift) * cell).join(' ')
+            : columns
+                ? Array.from(value, (_, index) => unitX - (displayLength(value) - 1 - index + shift) * cell).join(' ')
             : String(right - shift * cell);
         content.push(`<text x="${positions}" y="${y}" text-anchor="${columns ? 'middle' : 'end'}" font-size="${size}" fill="${COLORS.black}" data-arithmetic-row="${role}" data-arithmetic-shift="${shift}">${escapeXml(value)}</text>`);
     };
@@ -1796,40 +2270,63 @@ function renderFraction(spec: z.infer<typeof fractionSchema>): FigureDrawing | n
         content.push(text(400, 390, `${spec.numerator}/${spec.denominator}`, { size: 30, maxWidth: 620 }));
     } else {
         const center = spec.whole ? 430 : 400;
+        const numeratorSize = fitFontSize(spec.numerator, 32, 150);
+        const denominatorSize = fitFontSize(spec.denominator, 32, 150);
+        const fractionBarWidth = Math.max(
+            110,
+            Math.max(
+                displayWidth(spec.numerator) * numeratorSize,
+                displayWidth(spec.denominator) * denominatorSize,
+            ) + 16,
+        );
         if (spec.whole) content.push(text(295, 210, spec.whole, { size: 34, maxWidth: 120, anchor: 'end' }));
         content.push(text(center, 175, spec.numerator, { size: 32, maxWidth: 150 }));
-        content.push(line(center - 55, 195, center + 55, 195, { width: 2.5 }));
+        content.push(line(center - fractionBarWidth / 2, 195, center + fractionBarWidth / 2, 195, { width: 2.5 }));
         content.push(text(center, 240, spec.denominator, { size: 32, maxWidth: 150 }));
     }
     if (spec.label) content.push(text(400, 450, spec.label, { size: 20, maxWidth: 700 }));
     return root(content.join(''));
 }
 
-function renderNumberLine(spec: z.infer<typeof numberLineSchema>): FigureDrawing {
+function renderNumberLine(spec: z.infer<typeof numberLineSchema>): FigureDrawing | null {
     const content: string[] = [];
+    const labels = createGeometryLabelLayout();
     const x1 = 90;
     const x2 = 710;
     const y = 250;
     const range = spec.max - spec.min;
-    content.push(line(x1, y, x2, y, { width: 2.5 }));
+    content.push(labels.line(x1, y, x2, y, { width: 2.5 }));
+    for (const offset of [-7, 7]) labels.segment({ x: x2, y }, { x: x2 - 12, y: y + offset });
     content.push(`<path d="M ${x2} ${y} L ${x2 - 12} ${y - 7} M ${x2} ${y} L ${x2 - 12} ${y + 7}" stroke="${COLORS.black}" stroke-width="2" fill="none"/>`);
-    const count = Math.min(80, Math.floor(range / spec.step) + 1);
-    for (let index = 0; index < count; index += 1) {
-        const value = spec.min + index * spec.step;
-        if (value > spec.max + spec.step / 100) break;
-        const x = x1 + (value - spec.min) / range * (x2 - x1);
-        content.push(line(x, y - 10, x, y + 10, { width: 1.5 }));
-        content.push(text(x, y + 38, Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4))), { size: 18, maxWidth: 90 }));
+    const values = createFigureAxisTicks(spec.min, spec.max, spec.step);
+    if (!values) return null;
+    const ticks = values.map((tick) => ({ ...tick, x: x1 + (tick.value - spec.min) / range * (x2 - x1) }));
+    let tickSize = 18;
+    for (; tickSize >= 12; tickSize -= 1) {
+        let previousRight = Number.NEGATIVE_INFINITY;
+        const fits = ticks.every((tick) => {
+            const width = displayWidth(tick.label) * tickSize;
+            const spaced = width <= 90 && tick.x - width / 2 >= previousRight + 3;
+            previousRight = tick.x + width / 2;
+            return spaced;
+        });
+        if (fits) break;
     }
-    for (const point of spec.points) {
-        if (point.value < spec.min || point.value > spec.max) continue;
-        const x = x1 + (point.value - spec.min) / range * (x2 - x1);
-        const color = COLORS[point.color ?? 'red'];
-        content.push(`<circle cx="${x}" cy="${y}" r="7" fill="${color}"/>`);
-        if (point.label) content.push(text(x, y - 22, point.label, { size: 20, maxWidth: 100, color }));
+    if (tickSize < 12) return null;
+    for (const tick of ticks) {
+        content.push(labels.line(tick.x, y - 10, tick.x, y + 10, { width: 1.5 }));
+        content.push(labels.text(tick.x, y + 38, tick.label, { size: tickSize, maxWidth: 90 }));
     }
-    if (spec.label) content.push(text(400, 100, spec.label, { size: 22, maxWidth: 700 }));
-    return root(content.join(''));
+    const points = spec.points.map((point) => ({
+        x: x1 + (point.value - spec.min) / range * (x2 - x1), y,
+        label: point.label, color: COLORS[point.color ?? 'red'],
+    }));
+    for (const point of points) content.push(`<circle cx="${point.x}" cy="${point.y}" r="7" fill="${point.color}"/>`);
+    if (spec.label) content.push(labels.text(400, 100, spec.label, { size: 22, maxWidth: 700 }));
+    const renderedLabels = labels.renderLabels(points, { size: 20, maxWidth: 100, radius: 7 });
+    if (!renderedLabels) return null;
+    content.push(renderedLabels.svg);
+    return root(content.join(''), 500, renderedLabels.viewport);
 }
 
 function renderGeometry(spec: z.infer<typeof basicGeometrySchema>): FigureDrawing | null {
@@ -1952,42 +2449,159 @@ function renderChart(spec: z.infer<typeof barChartSchema> | z.infer<typeof lineC
     const content: string[] = [];
     const isBar = spec.type === 'bar_chart';
     const values = spec.values;
-    const maxValue = Math.max(spec.maxValue ?? Math.max(...values, 1), ...values, 1);
-    const minValue = spec.type === 'line_chart' ? Math.min(spec.minValue ?? Math.min(0, ...values), ...values) : 0;
+    const domain = getFigureChartDomain(spec);
+    if (!domain) return null;
+    const { min: minValue, max: maxValue } = domain;
     const x = 100;
     const y = 70;
     const width = 600;
     const height = 330;
     const categoryMaxWidth = isBar ? (width / spec.categories.length) * 0.58 : (width / values.length) * 0.9;
     if (spec.categories.some((category) => !wrappedLinesFit(wrapTextLines(category, 16, categoryMaxWidth), 16, categoryMaxWidth))) return null;
+    if ((spec.title && fitFontSize(spec.title, 22, 700) < 12)
+        || (spec.unit && fitFontSize(spec.unit, 18, 55) < 12)) return null;
+    if (isBar && values.some((value) => fitFontSize(String(value), 16, (width / spec.categories.length) * 0.58) < 12)) return null;
     content.push(line(x, y + height, x + width, y + height, { width: 2 }));
     content.push(line(x, y, x, y + height, { width: 2 }));
     if (spec.title) content.push(text(400, 35, spec.title, { size: 22, maxWidth: 700 }));
-    const scale = (value: number) => y + height - (value - minValue) / Math.max(1, maxValue - minValue) * height;
+    const scale = (value: number) => y + height - (value - minValue) / (maxValue - minValue) * height;
     if (isBar) {
         const slot = width / spec.categories.length;
-        values.forEach((value, index) => {
+        const bars = values.map((value, index) => {
             const barHeight = Math.max(0, y + height - scale(value));
             const barWidth = slot * 0.58;
             const barX = x + index * slot + (slot - barWidth) / 2;
-            content.push(`<rect x="${barX}" y="${y + height - barHeight}" width="${barWidth}" height="${barHeight}" fill="${COLORS.lightBlue}" stroke="${COLORS.black}" stroke-width="1.5"/>`);
-            content.push(textWithLineWrap(barX + barWidth / 2, y + height + 28, spec.categories[index]!, { size: 16, maxWidth: barWidth }));
-            content.push(text(barX + barWidth / 2, y + height - barHeight - 10, String(value), { size: 16, maxWidth: barWidth }));
+            return { value, barHeight, barWidth, barX, barY: y + height - barHeight, centerX: barX + barWidth / 2 };
+        });
+        const categoryBoxes = bars.map((bar, index) => chartWrappedTextBox(
+            bar.centerX, y + height + 28, spec.categories[index]!, 16, bar.barWidth,
+        ));
+        if (categoryBoxes.some((box) => box === null)) return null;
+        const titleBox = spec.title ? chartTextBox(400, 35, spec.title, 22, 700) : null;
+        const unitBox = spec.unit ? chartTextBox(735, 70, spec.unit, 18, 55, 'start') : null;
+        if ((spec.title && !titleBox) || (spec.unit && !unitBox)) return null;
+        const valueLabels = bars.map((bar) => {
+            const size = fitFontSize(String(bar.value), 16, bar.barWidth);
+            return {
+                x: bar.centerX,
+                y: bar.barY,
+                width: displayWidth(String(bar.value)) * size,
+                height: size * 1.6,
+                size,
+            };
+        });
+        if (valueLabels.some((label) => label.size < 12)) return null;
+        const barObstacles: FigureLabelObstacle[] = bars.filter((bar) => bar.barHeight > 0).map((bar) => ({
+            type: 'box', box: { left: bar.barX, top: bar.barY, width: bar.barWidth, height: bar.barHeight },
+        }));
+        const axisObstacles: FigureLabelObstacle[] = [
+            { type: 'segment', from: { x, y: y + height }, to: { x: x + width, y: y + height } },
+            { type: 'segment', from: { x, y }, to: { x, y: y + height } },
+        ];
+        const valueLayout = layoutFigureGeometryLabels(
+            valueLabels,
+            [],
+            [...barObstacles, ...axisObstacles],
+            [],
+            { left: 8, top: 8, width: 784, height: 484 },
+            { fixed: [
+                ...categoryBoxes.map((box) => box!),
+                ...(titleBox ? [titleBox] : []),
+                ...(unitBox ? [unitBox] : []),
+            ] },
+        );
+        if (!valueLayout) return null;
+        bars.forEach((bar, index) => {
+            content.push(`<rect x="${bar.barX}" y="${bar.barY}" width="${bar.barWidth}" height="${bar.barHeight}" fill="${COLORS.lightBlue}" stroke="${COLORS.black}" stroke-width="1.5"/>`);
+            content.push(textWithLineWrap(bar.centerX, y + height + 28, spec.categories[index]!, { size: 16, maxWidth: bar.barWidth }));
+            const label = valueLabels[index]!;
+            const box = valueLayout.points[index]!;
+            content.push(text(box.left + box.width / 2, box.top + label.size * 1.2, String(bar.value), {
+                size: label.size, maxWidth: bar.barWidth,
+            }));
         });
     } else {
         // 折线首尾留出内边距，避免数据点和纵轴、右侧单位标注重叠。
         const plotInset = Math.min(32, width / (values.length * 2));
         const plotWidth = width - plotInset * 2;
         const points = values.map((value, index) => ({ x: x + plotInset + index * plotWidth / (values.length - 1), y: scale(value) }));
+        if (values.some((value) => fitFontSize(String(value), 16, 80) < 12)) return null;
+        const categoryBoxes = points.map((point, index) => chartWrappedTextBox(
+            point.x, y + height + 28, spec.categories[index]!, 16, width / values.length * 0.9,
+        ));
+        if (categoryBoxes.some((box) => box === null)) return null;
+        const titleBox = spec.title ? chartTextBox(400, 35, spec.title, 22, 700) : null;
+        const unitBox = spec.unit ? chartTextBox(735, 70, spec.unit, 18, 55, 'start') : null;
+        if ((spec.title && !titleBox) || (spec.unit && !unitBox)) return null;
+        const valueSizes = values.map((value) => fitFontSize(String(value), 16, 80));
+        const valueLabels = points.map((point, index) => ({
+            x: point.x,
+            y: point.y,
+            width: displayWidth(String(values[index])) * valueSizes[index]!,
+            height: valueSizes[index]! * 1.6,
+        }));
+        const lineObstacles: FigureLabelObstacle[] = points.slice(1).map((point, index) => ({
+            type: 'segment', from: points[index]!, to: point,
+        }));
+        const pointObstacles: FigureLabelObstacle[] = points.map((point) => ({
+            type: 'circle', center: point, radius: 5, solid: true,
+        }));
+        const axisObstacles: FigureLabelObstacle[] = [
+            { type: 'segment', from: { x, y: y + height }, to: { x: x + width, y: y + height } },
+            { type: 'segment', from: { x, y }, to: { x, y: y + height } },
+        ];
+        const valueLayout = layoutFigureGeometryLabels(
+            valueLabels,
+            [],
+            [...lineObstacles, ...pointObstacles, ...axisObstacles],
+            [],
+            { left: 8, top: 8, width: 784, height: 484 },
+            { fixed: [
+                ...categoryBoxes.map((box) => box!),
+                ...(titleBox ? [titleBox] : []),
+                ...(unitBox ? [unitBox] : []),
+            ] },
+        );
+        if (!valueLayout) return null;
         content.push(`<polyline points="${points.map((point) => `${point.x},${point.y}`).join(' ')}" fill="none" stroke="${COLORS.blue}" stroke-width="3"/>`);
         points.forEach((point, index) => {
             content.push(`<circle cx="${point.x}" cy="${point.y}" r="5" fill="${COLORS.blue}"/>`);
             content.push(textWithLineWrap(point.x, y + height + 28, spec.categories[index]!, { size: 16, maxWidth: width / values.length * 0.9 }));
-            content.push(text(point.x, point.y - 12, String(values[index]), { size: 16, maxWidth: 80, color: COLORS.blue }));
+            const box = valueLayout.points[index]!;
+            content.push(text(box.left + box.width / 2, box.top + valueSizes[index]! * 1.2, String(values[index]), {
+                size: valueSizes[index], maxWidth: 80, color: COLORS.blue,
+            }));
         });
     }
     if (spec.unit) content.push(text(735, 70, spec.unit, { size: 18, maxWidth: 55, anchor: 'start' }));
     return root(content.join(''));
+}
+
+function chartWrappedTextBox(x: number, baseline: number, value: string, size: number, maxWidth: number): FigureLabelBox | null {
+    const lines = wrapTextLines(value, size, maxWidth);
+    if (!wrappedLinesFit(lines, size, maxWidth)) return null;
+    const width = Math.max(...lines.map((lineValue) => displayWidth(lineValue))) * size;
+    const height = size * 1.6 + (lines.length - 1) * textLineGap(size);
+    return { left: x - width / 2, top: baseline - size * 1.2, width, height };
+}
+
+function chartTextBox(
+    x: number,
+    baseline: number,
+    value: string,
+    size: number,
+    maxWidth: number,
+    anchor: 'start' | 'middle' = 'middle',
+): FigureLabelBox | null {
+    const actualSize = fitFontSize(value, size, maxWidth);
+    if (actualSize < 12) return null;
+    const width = displayWidth(value) * actualSize;
+    return {
+        left: anchor === 'start' ? x : x - width / 2,
+        top: baseline - actualSize * 1.2,
+        width,
+        height: actualSize * 1.6,
+    };
 }
 
 function getGridLayout(spec: z.infer<typeof gridShapeSchema>): {
@@ -2060,7 +2674,7 @@ function renderTable(spec: z.infer<typeof tableSchema>): FigureDrawing | null {
     const width = 660;
     const colWidth = width / columns;
     const headerSize = Math.max(12, Math.min(18, 560 / (rows.length + 1) * 0.55));
-    const bodySize = Math.max(11, Math.min(17, 560 / (rows.length + 1) * 0.52));
+    const bodySize = Math.max(12, Math.min(17, 560 / (rows.length + 1) * 0.52));
     const cellMaxWidth = colWidth * 0.85;
     const headerLines = spec.headers.map((header) => wrapTextLines(header, headerSize, cellMaxWidth));
     const bodyLines = rows.map((row) => row.map((value) => wrapTextLines(value, bodySize, cellMaxWidth)));
@@ -2107,13 +2721,19 @@ function renderTable(spec: z.infer<typeof tableSchema>): FigureDrawing | null {
 
 function renderParsedFigureSpec(spec: SingleFigureSpec): FigureDrawing | null {
     switch (spec.type) {
-        case 'vertical_arithmetic': return renderVerticalArithmetic(spec);
+        case 'vertical_arithmetic': return spec.operation === '÷'
+            && COLUMN_ARITHMETIC_TOKEN.test(spec.top)
+            && COLUMN_ARITHMETIC_TOKEN.test(spec.bottom)
+            ? renderVerticalDivision(spec)
+            : renderVerticalArithmetic(spec);
         case 'fraction': return renderFraction(spec);
         case 'number_line': return renderNumberLine(spec);
         case 'coordinate_plane': return renderCoordinatePlane(spec);
         case 'circle_geometry': return renderCircleGeometry(spec);
         case 'area_geometry': return renderAreaGeometry(spec);
         case 'solid_geometry': return renderSolidGeometry(spec);
+        case 'round_solid': return renderRoundSolid(spec);
+        case 'sphere_geometry': return renderSphere(spec);
         case 'basic_geometry': return renderGeometry(spec);
         case 'bar_chart':
         case 'line_chart': return renderChart(spec);
@@ -2239,6 +2859,7 @@ export function renderFigureSpecDetailed(raw: unknown, questionText?: string | n
 
     const svg = sanitizeFigureSvg(serializeDrawing(rendered));
     if (!svg) return { svg: null, diagnostic: { ok: false, reason: 'sanitize_failed', type: parsed.spec.type } };
+    if (hasUnreadableSvgText(svg)) return { svg: null, diagnostic: { ok: false, reason: 'renderer_unavailable', type: parsed.spec.type } };
     if (hasInvalidSvgNumber(svg)) return { svg: null, diagnostic: { ok: false, reason: 'invalid_svg_number', type: parsed.spec.type } };
     if (parsed.spec.type !== 'figure_group' && hasOutOfBoundsSvgGeometry(svg)) return { svg: null, diagnostic: { ok: false, reason: 'svg_geometry_out_of_bounds', type: parsed.spec.type } };
     return { svg, diagnostic: parsed.diagnostic };

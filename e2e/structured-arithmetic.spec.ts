@@ -45,10 +45,8 @@ for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', widt
             expect(displayed.height).toBeGreaterThan(0);
             expect(displayed.darkPixels).toBeGreaterThan(500);
             for (const value of fixture.mustContain) expect(displayed.markup).toContain(value);
-            if (fixture.id !== 'multiplication-skipped-zero-position') {
-                expect(displayed.markup).not.toContain('>850</text>');
-                expect(displayed.markup).not.toContain('>170</text>');
-            }
+            if (!fixture.mustContain.includes('>850</text>')) expect(displayed.markup).not.toContain('>850</text>');
+            if (!fixture.mustContain.includes('>170</text>')) expect(displayed.markup).not.toContain('>170</text>');
             const source: Record<string, unknown> = fixture.spec;
             const panels = source.type === 'figure_group'
                 ? (source.figures as Array<{ figure: Record<string, unknown> }>).map(({ figure }) => figure)
@@ -91,9 +89,16 @@ for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', widt
                             if (Math.abs(unit - center(text, text.getNumberOfChars() - 1) - expectedShifts[index][partialIndex] * 30) > 0.1) issues.push('实际字形的数位错开错误');
                         });
                         for (const text of rows) {
+                            const characters = Array.from(text.textContent ?? '');
                             for (let position = 1; position < text.getNumberOfChars(); position += 1) {
-                                if (Math.abs(center(text, position) - center(text, position - 1) - 30) > 0.1) issues.push('数字或方框未使用相同的列间距');
+                                const gap = characters[position] === '.' || characters[position - 1] === '.' ? 15 : 30;
+                                if (Math.abs(center(text, position) - center(text, position - 1) - gap) > 0.1) issues.push('数字、方框或小数点的实际列间距错误');
                             }
+                        }
+                        const bottom = rows.find((text) => text.getAttribute('data-arithmetic-row') === 'bottom')!;
+                        const result = rows.find((text) => text.getAttribute('data-arithmetic-row') === 'result');
+                        if ([bottom, ...(result ? [result] : [])].some((text) => Math.abs(center(text, text.getNumberOfChars() - 1) - unit) > 0.1)) {
+                            issues.push('因数或结果的末位数字没有对齐');
                         }
                         const boxes = localTexts.map((text) => ({ text, box: text.getBBox() }));
                         boxes.forEach(({ box, text }, index) => {

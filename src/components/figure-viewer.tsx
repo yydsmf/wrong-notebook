@@ -55,7 +55,9 @@ export function FigureViewer({ src, svg, onClose, onReturnFocus }: FigureViewerP
                             style={imageStyle}
                             onLoad={(event) => {
                                 const image = event.currentTarget;
-                                const size = svg ? getFigureReadingSize(svg, image.naturalWidth, image.naturalHeight) : null;
+                                const size = svg
+                                    ? getFigureReadingSize(svg, image.naturalWidth, image.naturalHeight, image.clientWidth, image.clientHeight)
+                                    : null;
                                 setReadingSize((previous) => size && svg
                                     ? previous?.src === src && previous.svg === svg && previous.width === size.width ? previous : { src, svg, width: size.width }
                                     : previous === null ? previous : null);

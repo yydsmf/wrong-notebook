@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseFigure } from '@/lib/ai/schema';
 import { parseFigureSpec, renderFigureSpecDetailed } from '@/lib/figure-spec';
+import { validateFigureRightTriangleLengths, validateFigureTriangleLengths } from '@/lib/figure-measurements';
 
 const square = { type: 'area_geometry', shape: 'square', width: 40, height: 40 };
 const cube = { type: 'solid_geometry', shape: 'cube', width: 40, depth: 40, height: 40 };
@@ -16,6 +17,13 @@ const rightAngle = {
 const raw = (value: unknown) => JSON.stringify(value);
 
 describe('结构化配图中的明确度量关系', () => {
+    it('三边关系先按倍数换算，直径的一半不能冒充完整直径参与勾股比较', () => {
+        const radius = [{ label: '6cm', multiple: 2 as const }];
+        expect(validateFigureRightTriangleLengths(radius, [{ label: '4cm' }], [{ label: '5cm' }])).toBe(true);
+        expect(validateFigureRightTriangleLengths(radius, [{ label: '4cm' }], [{ label: '6cm' }])).toBe(false);
+        expect(validateFigureTriangleLengths([radius, [{ label: '1cm' }], [{ label: '5cm' }]])).toBe(false);
+        expect(validateFigureTriangleLengths([radius, [{ label: '4cm' }], [{ label: '5cm' }]])).toBe(true);
+    });
     it.each([
         { name: '正方形底和高不同', spec: { ...square, baseLabel: '边长5cm', heightLabel: '6cm' } },
         { name: '正方形第三条边不同', spec: { ...square, baseLabel: '5cm', topLabel: '6cm' } },
@@ -74,9 +82,13 @@ describe('结构化配图中的明确度量关系', () => {
         expect(parseFigureSpec(raw(spec))).toMatchObject(spec);
     });
 
-    it.each(['90°', '90度', '90.0 °', '180/2度'])('直角的明确标注 %s 可以保留', (label) => {
+    it.each(['90°', '90度', '90.0 °', '180/2度', '90 degrees', '90 degree'])('直角的明确标注 %s 可以保留', (label) => {
         const spec = { ...rightAngle, angles: [{ vertex: 'O', from: 'A', to: 'B', style: 'right', label }] };
         expect(parseFigureSpec(raw(spec))).toMatchObject(spec);
+    });
+
+    it.each(['60 degrees', '90.00000000000000001 degrees', '1/0 degrees'])('直角的英文度数标注 %s 不能绕过精确校验', (label) => {
+        expect(parseFigureSpec(raw({ ...rightAngle, angles: [{ vertex: 'O', from: 'A', to: 'B', style: 'right', label }] }))).toBeNull();
     });
 
     it.each(['1', 'α', 'x°', '(x+30)°', '?', '□'])('直角编号或未知表达式 %s 不被求值或当作度数', (label) => {

@@ -85,4 +85,14 @@ describe('getStudentReviewPlan', () => {
             { result: 'correct', createdAt: at('2026-10-13T02:00:00Z') },
         ], TZ).nextReviewAt?.toISOString()).toBe('2026-10-26T16:00:00.000Z');
     });
+
+    it('按连续答对次数依次使用 1、3、7、14 天间隔，完成后停止安排', () => {
+        const dates = ['2026-10-05T02:00:00Z', '2026-10-06T02:00:00Z', '2026-10-09T02:00:00Z', '2026-10-16T02:00:00Z'];
+        const expected = ['2026-10-05T16:00:00.000Z', '2026-10-08T16:00:00.000Z', '2026-10-15T16:00:00.000Z', '2026-10-29T16:00:00.000Z'];
+        for (let count = 1; count <= dates.length; count++) {
+            const records = dates.slice(0, count).map((createdAt) => ({ result: 'correct', createdAt: at(createdAt) }));
+            expect(getStudentReviewPlan(created, records, TZ).nextReviewAt?.toISOString()).toBe(expected[count - 1]);
+        }
+        expect(getStudentReviewPlan(created, dates.map((createdAt) => ({ result: 'correct', createdAt: at(createdAt) })).concat({ result: 'correct', createdAt: at('2026-10-30T02:00:00Z') }), TZ)).toEqual({ stage: 5, nextReviewAt: null });
+    });
 });

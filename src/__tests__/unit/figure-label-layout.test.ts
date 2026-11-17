@@ -340,6 +340,24 @@ describe('角度和扇形标注避让', () => {
         expect(box.top + box.height).toBeLessThan(250);
     });
 
+    it('窄扇形没有八像素图元留白时回退，不勉强贴着边界弦放字', () => {
+        const center = { x: 400, y: 250 };
+        const radius = 117;
+        const start = Math.PI;
+        const delta = -35 * Math.PI / 180;
+        const point = (angle: number) => ({ x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius });
+        const from = point(start);
+        const to = point(start + delta);
+        const obstacles: FigureLabelObstacle[] = [
+            { type: 'segment', from: center, to: from },
+            { type: 'segment', from: center, to },
+            { type: 'segment', from, to },
+        ];
+        const label = { ...base, center, start, delta, outerRadius: radius, preferredRadius: radius * 0.58 };
+
+        expect(layoutFigureGeometryLabels([], [], obstacles, [label])).toBeNull();
+    });
+
     it('多个扇形标注、点名和长度标注一起排版且不改变输入', () => {
         const labels = [base, { ...base, start: Math.PI / 2 }, { ...base, kind: 'arc' as const, innerRadius: 160, outerRadius: 240, preferredRadius: 200 }];
         const original = structuredClone(labels);

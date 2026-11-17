@@ -8,6 +8,7 @@ export interface FigureSpecFixture {
     unbrokenText?: string[];
     elementMinimums?: Record<string, number>;
     pixelChecks?: Array<{ x: number; y: number; fill: 'shaded' | 'plain'; expectedRgba?: [number, number, number, number] }>;
+    arithmeticAlignment?: 'decimal';
 }
 
 /**
@@ -104,6 +105,36 @@ export const STRUCTURED_FIGURE_FIXTURES: FigureSpecFixture[] = [
         elementMinimums: { line: 2, text: 5 },
     },
     {
+        id: 'primary-vertical-decimal-addition',
+        stage: '小学',
+        type: 'vertical_arithmetic',
+        spec: {
+            type: 'vertical_arithmetic', operation: '+', top: '12.30', bottom: '4.56',
+            partialProducts: [], result: '16.86',
+        },
+        mustContain: ['12.30', '4.56', '16.86'],
+        elementMinimums: { line: 1, text: 4 },
+        arithmeticAlignment: 'decimal',
+    },
+    {
+        id: 'primary-vertical-division',
+        stage: '小学',
+        type: 'vertical_arithmetic',
+        spec: {
+            type: 'vertical_arithmetic',
+            operation: '÷',
+            top: '847',
+            bottom: '7',
+            divisionSteps: [
+                { value: '8', subtract: '7', shift: 2 }, { value: '14', subtract: '14', shift: 1 }, { value: '7', subtract: '7', shift: 0 },
+            ],
+            result: '121',
+            remainder: '0',
+        },
+        mustContain: ['847', '7', '14', '121', '余数 0'],
+        elementMinimums: { path: 1, line: 4, text: 6 },
+    },
+    {
         id: 'primary-fraction-circle',
         stage: '小学',
         type: 'fraction',
@@ -152,6 +183,59 @@ export const STRUCTURED_FIGURE_FIXTURES: FigureSpecFixture[] = [
         spec: { type: 'number_line', min: 0, max: 10, step: 1, points: [{ value: 6, label: 'A', color: 'red' }], label: '数轴' },
         mustContain: ['>A</text>', '>数轴</text>'],
         elementMinimums: { line: 12, path: 1, circle: 1, text: 12 },
+    },
+    {
+        id: 'junior-number-line-dense-negative', stage: '初中', type: 'number_line',
+        spec: { type: 'number_line', min: -12, max: 12, step: 1 },
+        mustContain: ['>-12</text>', '>12</text>'],
+        mustHaveText: Array.from({ length: 25 }, (_, index) => String(index - 12)),
+        elementMinimums: { line: 26, path: 1, text: 25 },
+    },
+    {
+        id: 'junior-number-line-close-points', stage: '初中', type: 'number_line',
+        spec: { type: 'number_line', min: 0, max: 10, step: 1, points: [{ value: 4.5, label: 'A₁' }, { value: 4.8, label: 'B₁', color: 'blue' }] },
+        mustContain: ['>A₁</text>', '>B₁</text>', 'data-figure-label="point"'],
+        mustHaveText: ['A₁', 'B₁', ...Array.from({ length: 11 }, (_, index) => String(index))],
+        elementMinimums: { circle: 2, text: 13 },
+        pixelChecks: [
+            { x: 369, y: 250, fill: 'shaded', expectedRgba: [198, 40, 40, 255] },
+            { x: 387.6, y: 250, fill: 'shaded', expectedRgba: [21, 101, 192, 255] },
+        ],
+    },
+    {
+        id: 'junior-number-line-unnamed-point', stage: '初中', type: 'number_line',
+        spec: { type: 'number_line', min: 0, max: 10, step: 1, points: [{ value: 5, label: 'A', color: 'blue' }, { value: 5.2 }] },
+        mustContain: ['>A</text>'], mustHaveText: ['A'],
+        elementMinimums: { circle: 2, text: 12 },
+        pixelChecks: [
+            { x: 400, y: 250, fill: 'shaded', expectedRgba: [21, 101, 192, 255] },
+            { x: 412.4, y: 250, fill: 'shaded', expectedRgba: [198, 40, 40, 255] },
+        ],
+    },
+    {
+        id: 'junior-number-line-coincident-points', stage: '初中', type: 'number_line',
+        spec: { type: 'number_line', min: 0, max: 10, step: 1, points: [{ value: 5, label: 'A' }, { value: 5, label: 'B' }] },
+        mustContain: ['>A</text>', '>B</text>'], mustHaveText: ['A', 'B'],
+        elementMinimums: { circle: 2, text: 13 },
+    },
+    {
+        id: 'primary-number-line-endpoint-labels', stage: '小学', type: 'number_line',
+        spec: { type: 'number_line', min: 0, max: 10, step: 1, points: [{ value: 0, label: 'A' }, { value: 10, label: 'B' }] },
+        mustContain: ['>A</text>', '>B</text>'], mustHaveText: ['A', 'B', '0', '10'],
+        elementMinimums: { circle: 2, text: 13 },
+    },
+    {
+        id: 'primary-number-line-fine-decimals', stage: '小学', type: 'number_line',
+        spec: { type: 'number_line', min: 0, max: 0.00003, step: 0.00001 },
+        mustContain: ['>0.00001</text>', '>0.00003</text>'],
+        mustHaveText: ['0', '0.00001', '0.00002', '0.00003'],
+        elementMinimums: { line: 5, text: 4 },
+    },
+    {
+        id: 'junior-coordinate-decimal-endpoint', stage: '初中', type: 'coordinate_plane',
+        spec: { type: 'coordinate_plane', xMin: 0, xMax: 0.3, xStep: 0.1, yMin: 0, yMax: 0.3, yStep: 0.1 },
+        mustContain: ['>0.3</text>'], mustHaveText: ['0', '0.1', '0.2', '0.3'],
+        elementMinimums: { line: 10, text: 7 },
     },
     {
         id: 'primary-area-triangle',

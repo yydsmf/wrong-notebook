@@ -121,6 +121,7 @@ export const translations = {
             round: "Round {round} of {total}",
             empty: "Nothing to review today",
             emptyHint: "Questions come back on schedule after you record practice results. Add new mistakes or check back tomorrow.",
+            studentEmptyHint: "New review questions will appear here according to the 1, 3, 7 and 14-day schedule. Your latest graded result is shown below when available.",
         },
         nav: {
             home: "Add",
@@ -159,6 +160,7 @@ export const translations = {
             removeImage: "Remove image",
             submitError: "Answers could not be submitted. Please try again.",
             retryGrading: "Retry failed grading",
+            continueReview: "Review due questions again",
         },
         theme: {
             toggle: "Theme",
@@ -1634,6 +1636,7 @@ export const translations = {
             round: "第 {round} / {total} 轮",
             empty: "今天没有需要复习的错题",
             emptyHint: "录入举一反三结果后，错题会按计划回到这里。可以继续录入新错题，或明天再来。",
+            studentEmptyHint: "新复习题会按 1、3、7、14 天的计划回到这里。有最近一次批改结果时，会在下方显示。",
         },
         nav: {
             home: "录入",
@@ -1672,6 +1675,7 @@ export const translations = {
             removeImage: "移除图片",
             submitError: "提交失败，请重试。",
             retryGrading: "重试未完成的批改",
+            continueReview: "继续复习到期题目",
         },
         theme: {
             toggle: "主题",

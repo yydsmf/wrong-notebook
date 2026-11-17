@@ -19,6 +19,9 @@ interface StudentAnswerWorkspaceProps {
     kind: "review" | "exam";
     questions: StudentAnswerQuestion[];
     examPaperId?: string;
+    initialSubmission?: StudentSubmission | null;
+    onContinueReview?: () => void;
+    onSubmissionUpdate?: (submission: StudentSubmission) => void;
 }
 
 interface DraftAnswer {
@@ -31,10 +34,10 @@ function hasAnswer(answer?: DraftAnswer) {
     return Boolean(answer?.text.trim() || answer?.image);
 }
 
-export function StudentAnswerWorkspace({ kind, questions, examPaperId }: StudentAnswerWorkspaceProps) {
+export function StudentAnswerWorkspace({ kind, questions, examPaperId, initialSubmission = null, onContinueReview, onSubmissionUpdate }: StudentAnswerWorkspaceProps) {
     const { t } = useLanguage();
     const [drafts, setDrafts] = useState<Record<string, DraftAnswer>>({});
-    const [submission, setSubmission] = useState<StudentSubmission | null>(null);
+    const [submission, setSubmission] = useState<StudentSubmission | null>(() => initialSubmission);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [retrying, setRetrying] = useState(false);
@@ -43,27 +46,46 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId }: Student
         (submission?.answers ?? []).map((answer) => [answer.errorItemId || answer.examQuestionId || "", answer]),
     ), [submission]);
 
-    const loadLatest = useCallback(async () => {
+    const loadSubmission = useCallback(async (submissionId: string) => {
         try {
-            const query = new URLSearchParams({ kind });
-            if (examPaperId) query.set("examPaperId", examPaperId);
-            const result = await apiClient.get<StudentSubmission | null>(`/api/student-submissions?${query}`);
-            setSubmission(result);
+            const result = await apiClient.get<StudentSubmission>(`/api/student-submissions/${submissionId}`);
+            setSubmission((current) => current?.id === submissionId ? result : current);
+            onSubmissionUpdate?.(result);
         } catch (loadError) {
             frontendLogger.error("[StudentAnswer]", "Failed to load submission", { loadError });
         }
+    }, [onSubmissionUpdate]);
+
+    useEffect(() => {
+        // 复习每次进入都从新作答开始；只有试卷恢复最近一次提交。
+        if (kind !== "exam" || !examPaperId) return;
+        let cancelled = false;
+        const query = new URLSearchParams({ kind, examPaperId });
+        void apiClient.get<StudentSubmission | null>(`/api/student-submissions?${query}`)
+            .then((result) => {
+                if (!cancelled) setSubmission((current) => current ?? result);
+            })
+            .catch((loadError: unknown) => {
+                frontendLogger.error("[StudentAnswer]", "Failed to load submission", { loadError });
+            });
+        return () => { cancelled = true; };
     }, [examPaperId, kind]);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- 加载当前学生最近一次提交
-        void loadLatest();
-    }, [loadLatest]);
-
-    useEffect(() => {
         if (submission?.status !== "grading") return;
-        const timer = window.setTimeout(() => void loadLatest(), 2500);
-        return () => window.clearTimeout(timer);
-    }, [loadLatest, submission?.status, submission?.gradedCount]);
+        const submissionId = submission.id;
+        let cancelled = false;
+        let timer: number;
+        const poll = async () => {
+            await loadSubmission(submissionId);
+            if (!cancelled) timer = window.setTimeout(() => void poll(), 2500);
+        };
+        timer = window.setTimeout(() => void poll(), 2500);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [loadSubmission, submission?.id, submission?.status]);
 
     const updateDraft = (questionId: string, patch: Partial<DraftAnswer>) => {
         setDrafts((current) => ({
@@ -89,6 +111,7 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId }: Student
             setDrafts({});
             const fresh = await apiClient.get<StudentSubmission>(`/api/student-submissions/${result.id}`);
             setSubmission(fresh);
+            onSubmissionUpdate?.(fresh);
         } catch (submitError) {
             frontendLogger.error("[StudentAnswer]", "Failed to submit answers", { submitError });
             setError(t.studentAnswer.submitError);
@@ -102,7 +125,7 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId }: Student
         setRetrying(true);
         try {
             await apiClient.post(`/api/student-submissions/${submission.id}/retry`, {});
-            await loadLatest();
+            await loadSubmission(submission.id);
         } catch (retryError) {
             frontendLogger.error("[StudentAnswer]", "Failed to retry grading", { retryError });
         } finally {
@@ -306,8 +329,10 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId }: Student
                                     )}
                                     {!answer.userAnswer && !answer.userAnswerImageUrl && <p className="text-muted-foreground">{t.studentAnswer.noAnswerRecorded}</p>}
                                 </div>
-                                <p className={`text-sm font-medium ${answer.isCorrect ? "text-green-700 dark:text-green-400" : "text-destructive"}`}>
-                                    {answer.status === "failed" ? t.studentAnswer.failed : answer.isCorrect ? t.studentAnswer.correct : t.studentAnswer.incorrect}
+                                <p className={`text-sm font-medium ${answer.status === "failed" || answer.status === "pending" || answer.status === "grading" ? "text-muted-foreground" : answer.isCorrect ? "text-green-700 dark:text-green-400" : "text-destructive"}`}>
+                                    {answer.status === "pending" || answer.status === "grading"
+                                        ? t.studentAnswer.grading
+                                        : answer.status === "failed" ? t.studentAnswer.failed : answer.isCorrect ? t.studentAnswer.correct : t.studentAnswer.incorrect}
                                 </p>
                                 {answer.reason && (
                                     <div className="text-sm text-muted-foreground">
@@ -338,6 +363,12 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId }: Student
                             </CardContent>
                         </Card>
                     ))}
+                    {onContinueReview && (
+                        <Button variant="outline" onClick={onContinueReview}>
+                            <RotateCcw className="size-4" />
+                            {t.studentAnswer.continueReview}
+                        </Button>
+                    )}
                 </section>
             )}
         </div>

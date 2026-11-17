@@ -26,6 +26,38 @@ export const ARITHMETIC_FIGURE_FIXTURES: Array<FigureSpecFixture & { initialVisi
         mustContain: ['>34</text>', '>205</text>', '>170</text>', '>68</text>', '>6970</text>'],
     },
     {
+        id: 'multiplication-decimal-top', stage: '小学', type: 'vertical_arithmetic', initialVisible: true,
+        spec: {
+            type: 'vertical_arithmetic', operation: '×', top: '3.4', bottom: '25',
+            partialProducts: [{ value: '170', label: '甲', shift: 0 }, { value: '68', label: '乙', shift: 1 }], result: '85.0',
+        },
+        mustContain: ['>3.4</text>', '>25</text>', '>170</text>', '>68</text>', '>85.0</text>', '>甲</text>', '>乙</text>'],
+    },
+    {
+        id: 'multiplication-decimal-different-scales', stage: '小学', type: 'vertical_arithmetic', initialVisible: true,
+        spec: {
+            type: 'vertical_arithmetic', operation: '×', top: '1.2', bottom: '0.35',
+            partialProducts: [{ value: '60', shift: 0 }, { value: '36', shift: 1 }], result: '0.420',
+        },
+        mustContain: ['>1.2</text>', '>0.35</text>', '>60</text>', '>36</text>', '>0.420</text>'],
+    },
+    {
+        id: 'multiplication-decimal-skipped-zero', stage: '小学', type: 'vertical_arithmetic', initialVisible: true,
+        spec: {
+            type: 'vertical_arithmetic', operation: '×', top: '3.4', bottom: '2.05',
+            partialProducts: [{ value: '170', shift: 0 }, { value: '68', shift: 2 }], result: '6.970',
+        },
+        mustContain: ['>3.4</text>', '>2.05</text>', '>170</text>', '>68</text>', '>6.970</text>'],
+    },
+    {
+        id: 'multiplication-decimal-answer-blanks', stage: '小学', type: 'vertical_arithmetic', initialVisible: true,
+        spec: {
+            type: 'vertical_arithmetic', operation: '×', top: '□.4', bottom: '2.5',
+            partialProducts: [{ value: '1□0', label: '甲', shift: 0 }, { value: '□□', label: '乙', shift: 1 }], result: '□.□0',
+        },
+        mustContain: ['>□.4</text>', '>2.5</text>', '>1□0</text>', '>□□</text>', '>□.□0</text>', '>甲</text>', '>乙</text>'],
+    },
+    {
         id: 'multiplication-wrapped-note', stage: '小学', type: 'vertical_arithmetic', initialVisible: true,
         spec: {
             type: 'vertical_arithmetic', operation: '×', top: '34', bottom: '25',

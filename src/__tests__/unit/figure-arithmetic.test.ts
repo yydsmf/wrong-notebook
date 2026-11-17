@@ -109,6 +109,250 @@ describe('竖式中的作答空格和数位关系', () => {
         expect(parsed).not.toHaveProperty('result');
     });
 
+    it('显式正号和全角符号不计入数位，仍能精确复算乘法部分积和结果', () => {
+        const parsed = parseFigureSpec(raw({
+            ...multiplication,
+            top: '＋３４',
+            bottom: '＋２５',
+            partialProducts: [{ value: '170', shift: 0 }, { value: '68', shift: 1 }],
+            result: '999',
+        }));
+        expect(parsed).toMatchObject({
+            top: '+34',
+            bottom: '+25',
+            partialProducts: [{ value: '170', shift: 0 }, { value: '68', shift: 1 }],
+            result: '850',
+        });
+        expect(renderFigureSpec(raw({
+            ...multiplication,
+            top: '＋３４',
+            bottom: '＋２５',
+            partialProducts: [{ value: '170', shift: 0 }, { value: '68', shift: 1 }],
+            result: '999',
+        }))).toContain('>+34</text>');
+    });
+
+    it('Unicode 负号参与整数复算，但保留题面符号', () => {
+        const parsed = parseFigureSpec(raw({
+            ...multiplication,
+            top: '−34',
+            bottom: '+25',
+            partialProducts: [{ value: '170', shift: 0 }, { value: '68', shift: 1 }],
+            result: '999',
+        }));
+        expect(parsed).toMatchObject({
+            top: '−34',
+            bottom: '+25',
+            partialProducts: [{ value: '-170', shift: 0 }, { value: '-68', shift: 1 }],
+            result: '-850',
+        });
+    });
+
+    it('负号乘数的部分积符号与复算结果保持一致', () => {
+        const parsed = parseFigureSpec(raw({
+            ...multiplication,
+            top: '34',
+            bottom: '−25',
+            partialProducts: [{ value: '170', shift: 0 }, { value: '68', shift: 1 }],
+            result: '999',
+        }));
+        expect(parsed).toMatchObject({
+            top: '34',
+            bottom: '−25',
+            partialProducts: [{ value: '-170', shift: 0 }, { value: '-68', shift: 1 }],
+            result: '-850',
+        });
+    });
+
+    it('加减小数竖式按小数点对齐，整数行也对齐到个位', () => {
+        const spec = {
+            type: 'vertical_arithmetic', operation: '+', top: '12.3', bottom: '4', result: '16.3',
+            partialProducts: [],
+        };
+        const svg = renderFigureSpec(raw(spec));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const rows = Object.fromEntries(Array.from(document.querySelectorAll('text[data-arithmetic-row]'))
+            .map((element) => [element.getAttribute('data-arithmetic-row'), element]));
+        const positions = (element: Element) => element.getAttribute('x')!.split(/\s+/u).map(Number);
+        const decimalPosition = (element: Element) => positions(element)[element.textContent!.indexOf('.')];
+        const unitsPosition = (element: Element) => {
+            const separator = element.textContent!.indexOf('.');
+            return positions(element)[separator < 0 ? element.textContent!.length - 1 : separator - 1];
+        };
+        expect(decimalPosition(rows.top!)).toBe(decimalPosition(rows.result!));
+        expect(unitsPosition(rows.top!)).toBe(unitsPosition(rows.bottom!));
+        expect(unitsPosition(rows.top!)).toBe(unitsPosition(rows.result!));
+        expect(decimalPosition(rows.top!) - unitsPosition(rows.bottom!)).toBe(30);
+    });
+
+    it('加减小数竖式支持不同小数位数的数字行', () => {
+        const spec = {
+            type: 'vertical_arithmetic', operation: '+', top: '12.30', bottom: '4.56', result: '16.86',
+            partialProducts: [],
+        };
+        const svg = renderFigureSpec(raw(spec));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const rows = Object.fromEntries(Array.from(document.querySelectorAll('text[data-arithmetic-row]'))
+            .map((element) => [element.getAttribute('data-arithmetic-row'), element]));
+        const positions = (element: Element) => element.getAttribute('x')!.split(/\s+/u).map(Number);
+        const decimalPosition = (element: Element) => positions(element)[element.textContent!.indexOf('.')];
+        expect(decimalPosition(rows.top!)).toBe(decimalPosition(rows.bottom!));
+        expect(decimalPosition(rows.top!)).toBe(decimalPosition(rows.result!));
+    });
+
+    it('加减小数竖式保留未知方框，并不把小数点当成普通末尾对齐字符', () => {
+        const spec = {
+            type: 'vertical_arithmetic', operation: '-', top: '□.50', bottom: '1.2', result: '□.30',
+            partialProducts: [],
+        };
+        const svg = renderFigureSpec(raw(spec));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const rows = Array.from(document.querySelectorAll('text[data-arithmetic-row]'));
+        const byText = new Map(rows.map((element) => [element.textContent, element]));
+        const positions = (element: Element) => element.getAttribute('x')!.split(/\s+/u).map(Number);
+        const decimalPosition = (element: Element) => positions(element)[element.textContent!.indexOf('.')];
+        expect(decimalPosition(byText.get('□.50')!)).toBe(decimalPosition(byText.get('1.2')!));
+        expect(decimalPosition(byText.get('□.50')!)).toBe(decimalPosition(byText.get('□.30')!));
+    });
+
+    it('含字母表达式时不误用小数点网格', () => {
+        const svg = renderFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '+', top: 'a.2', bottom: '1.3', result: 'b.5', partialProducts: [],
+        }));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const top = document.querySelector('text[data-arithmetic-row="top"]')!;
+        expect(top.getAttribute('x')!.trim().split(/\s+/u)).toHaveLength(1);
+    });
+
+    it('存在部分积时不误用小数加减网格', () => {
+        const svg = renderFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '+', top: '12.3', bottom: '4.56',
+            partialProducts: [{ value: '16.86', shift: 0 }], result: '16.86',
+        }));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const top = document.querySelector('text[data-arithmetic-row="top"]')!;
+        expect(top.getAttribute('x')!.trim().split(/\s+/u)).toHaveLength(1);
+    });
+
+    it.each(ARITHMETIC_FIGURE_FIXTURES.filter(({ id }) => id.startsWith('multiplication-decimal-')))('$id 按末位数字对齐，小数点不占整列', ({ spec }) => {
+        const svg = renderFigureSpec(raw(spec));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const rows = Array.from(document.querySelectorAll('text[data-arithmetic-row]'));
+        const positions = (element: Element) => element.getAttribute('x')!.split(/\s+/u).map(Number);
+        const top = rows.find((element) => element.getAttribute('data-arithmetic-row') === 'top')!;
+        const unit = positions(top).at(-1)!;
+        const partials = rows.filter((element) => element.getAttribute('data-arithmetic-row') === 'partial');
+        const source = spec as { top: string; bottom: string; result: string; partialProducts: Array<{ value: string; shift: number }> };
+        expect(rows.map((element) => element.textContent)).toEqual([
+            source.top, source.bottom, ...source.partialProducts.map(({ value }) => value), source.result,
+        ]);
+        for (const row of rows) {
+            const characters = Array.from(row.textContent!);
+            const anchors = positions(row);
+            expect(anchors).toHaveLength(characters.length);
+            expect(row.getAttribute('text-anchor')).toBe('middle');
+            for (let index = 1; index < characters.length; index += 1) {
+                const gap = characters[index] === '.' || characters[index - 1] === '.' ? 15 : 30;
+                expect(anchors[index] - anchors[index - 1]).toBe(gap);
+            }
+            if (row.getAttribute('data-arithmetic-row') !== 'partial') expect(anchors.at(-1)).toBe(unit);
+        }
+        partials.forEach((row, index) => expect(unit - positions(row).at(-1)!).toBe(source.partialProducts[index].shift * 30));
+    });
+
+    it('小数乘法不误用加减的小数点对齐，也不删除末尾零', () => {
+        const svg = renderFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '×', top: '1.20', bottom: '0.35', result: '0.4200',
+        }));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const rows = Array.from(document.querySelectorAll('text[data-arithmetic-row]'));
+        const decimal = (row: Element) => row.getAttribute('x')!.split(/\s+/u).map(Number)[row.textContent!.indexOf('.')];
+        expect(rows.map((row) => row.textContent)).toEqual(['1.20', '0.35', '0.4200']);
+        expect(decimal(rows[0])).toBe(decimal(rows[1]));
+        expect(decimal(rows[0]) - decimal(rows[2])).toBe(60);
+    });
+
+    it('小数乘法保留显式符号与题面已有结果，不静默复算', () => {
+        const spec = {
+            type: 'vertical_arithmetic', operation: '×', top: '＋３.４', bottom: '−２.５',
+            partialProducts: [{ value: '-170', shift: 0 }, { value: '-68', shift: 1 }], result: '-9.99',
+        };
+        expect(parseFigureSpec(raw(spec))).toMatchObject({ top: '+3.4', bottom: '−2.5', result: '-9.99', partialProducts: spec.partialProducts });
+        const svg = renderFigureSpec(raw(spec));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const rows = Array.from(document.querySelectorAll('text[data-arithmetic-row]'));
+        for (const row of rows) expect(row.getAttribute('x')!.split(/\s+/u)).toHaveLength(row.textContent!.length);
+        expect(rows.map((row) => row.textContent)).toEqual(['+3.4', '−2.5', '-170', '-68', '-9.99']);
+    });
+
+    it.each(['2.5', '−2.5', '＋２.５', '□.5'])('小数乘数 %s 的小数点和符号不计入部分积位数', (bottom) => {
+        const invalid = raw({
+            type: 'vertical_arithmetic', operation: '×', top: '3.4', bottom,
+            partialProducts: [{ value: '□□', shift: 2 }],
+        });
+        expect(renderFigureSpecDetailed(invalid)).toMatchObject({ svg: null, diagnostic: { reason: 'semantic_validation' } });
+        const legacy = '<svg xmlns="http://www.w3.org/2000/svg"><text>保留原配图</text></svg>';
+        expect(parseFigure('true', legacy, invalid)).toEqual({ hasFigure: true, figureSvg: legacy });
+        expect(parseFigure('true', null, invalid)).toEqual({ hasFigure: true, figureSvg: null });
+    });
+
+    it('小数未知量不补出缺少的部分积或结果', () => {
+        const spec = { type: 'vertical_arithmetic', operation: '×', top: '□.4', bottom: '2.5' };
+        expect(parseFigureSpec(raw(spec))).toMatchObject({ top: '□.4', bottom: '2.5', partialProducts: [] });
+        expect(parseFigureSpec(raw(spec))).not.toHaveProperty('result');
+        const svg = renderFigureSpec(raw(spec));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        expect(Array.from(document.querySelectorAll('text[data-arithmetic-row]'), (element) => element.textContent)).toEqual(['□.4', '2.5']);
+    });
+
+    it.each(['a.2', '1..2', '(1.2)'])('乘法中的不明确字符 %s 继续使用原有整行布局', (top) => {
+        const svg = renderFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '×', top, bottom: '2.5', result: '□.0',
+        }));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const row = document.querySelector('text[data-arithmetic-row="top"]')!;
+        expect(row.textContent).toBe(top);
+        expect(row.getAttribute('x')!.trim().split(/\s+/u)).toHaveLength(1);
+        expect(row.getAttribute('text-anchor')).toBe('end');
+    });
+
+    it('小数乘法的超宽列和标签仍整图回退，不挤压字形', () => {
+        const figure = {
+            type: 'vertical_arithmetic', operation: '×', top: '1.2', bottom: '1.234567890',
+            partialProducts: [{ value: '1.2345678901234567', shift: 8, label: '甲'.repeat(12) }],
+        };
+        expect(parseFigureSpec(raw(figure))).not.toBeNull();
+        expect(renderFigureSpecDetailed(raw(figure))).toMatchObject({ svg: null, diagnostic: { reason: 'renderer_unavailable' } });
+        const legacy = '<svg xmlns="http://www.w3.org/2000/svg"><text>完整旧配图</text></svg>';
+        expect(parseFigure('true', legacy, raw(figure))).toEqual({ hasFigure: true, figureSvg: legacy });
+    });
+
+    it('带正号的整数长除法仍按真实被除数位数校验逐步减数', () => {
+        const parsed = parseFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '÷', top: '＋847', bottom: '＋7',
+            divisionSteps: [
+                { value: '8', subtract: '7', shift: 2 }, { value: '14', subtract: '14', shift: 1 }, { value: '7', subtract: '7', shift: 0 },
+            ], result: '999',
+        }));
+        expect(parsed).toMatchObject({ top: '+847', bottom: '+7', result: '121' });
+        expect(renderFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '÷', top: '＋847', bottom: '＋7',
+            divisionSteps: [
+                { value: '8', subtract: '7', shift: 2 }, { value: '14', subtract: '14', shift: 1 }, { value: '7', subtract: '7', shift: 0 },
+            ], result: '999',
+        }))).not.toBeNull();
+    });
+
     it('未知被乘数也按每行默认数位错开，甲乙保持各自标签', () => {
         const spec = ARITHMETIC_FIGURE_FIXTURES[1].spec;
         expect(parseFigureSpec(raw(spec))).toMatchObject({ partialProducts: [{ shift: 0 }, { shift: 1 }] });
@@ -175,8 +419,59 @@ describe('竖式中的作答空格和数位关系', () => {
             .toMatchObject({ result: '899999999999999991' });
     });
 
+    it('除法使用独立长除法布局，精确保留商、余数和逐步减数的数位', () => {
+        const division = {
+            type: 'vertical_arithmetic', operation: '÷', top: '847', bottom: '7',
+            divisionSteps: [
+                { value: '8', subtract: '7', shift: 2 }, { value: '14', subtract: '14', shift: 1 }, { value: '7', subtract: '7', shift: 0 },
+            ], result: '999', remainder: '8',
+        };
+        const parsed = parseFigureSpec(raw(division));
+        expect(parsed).toMatchObject({
+            operation: '÷', result: '121', remainder: '0',
+            divisionSteps: [
+                { value: '8', subtract: '7', shift: 2 }, { value: '14', subtract: '14', shift: 1 }, { value: '7', subtract: '7', shift: 0 },
+            ],
+        });
+        const svg = renderFigureSpec(raw(division));
+        expect(svg).not.toBeNull();
+        expect(svg).toContain('>121</text>');
+        expect(svg).toContain('>847</text>');
+        expect(svg).toContain('>7</text>');
+        expect(svg).toContain('>余数 0</text>');
+        expect(svg).toContain('data-arithmetic-row="division-divisor"');
+        expect(svg).toContain('data-arithmetic-row="division-value"');
+        expect(svg).toContain('data-arithmetic-row="division-subtract"');
+        expect(svg).toContain('<path');
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const quotient = document.querySelector('[data-arithmetic-row="division-quotient"]')!;
+        const dividend = document.querySelector('[data-arithmetic-row="division-dividend"]')!;
+        const divisor = document.querySelector('[data-arithmetic-row="division-divisor"]')!;
+        expect(Number(quotient.getAttribute('y'))).toBeLessThan(Number(dividend.getAttribute('y')));
+        expect(Number(divisor.getAttribute('x'))).toBeLessThan(Number(dividend.getAttribute('x')!.split(/\s+/u).at(0)));
+    });
+
+    it('除法除数为零、逐步减数没有位移或非除法带余数时整图回退', () => {
+        expect(parseFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '÷', top: '84', bottom: '0', partialProducts: [], result: '0', remainder: '0',
+        }))).toBeNull();
+        expect(parseFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '÷', top: '-84', bottom: '4', partialProducts: [], result: '-21', remainder: '0',
+        }))).toBeNull();
+        expect(parseFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '÷', top: '84', bottom: '-4', partialProducts: [], result: '-21', remainder: '0',
+        }))).toBeNull();
+        expect(parseFigureSpec(raw({
+            type: 'vertical_arithmetic', operation: '÷', top: '84', bottom: '4', divisionSteps: [{ value: '8', subtract: '8', shift: 1 }], result: '21',
+        }))).toBeNull();
+        expect(parseFigureSpec(raw({ ...multiplication, remainder: '0' }))).toBeNull();
+    });
+
     it('统一提示词要求保留空格，并明确每行乘法位移不能重复', () => {
         expect(FIGURE_SPEC_RULES).toContain('不得把作答空格替换为计算结果');
         expect(FIGURE_SPEC_RULES).toContain('不同部分积不能重复使用同一 shift');
+        expect(FIGURE_SPEC_RULES).toContain('除法中 top 是被除数、bottom 是除数、result 是商、remainder 是余数');
+        expect(FIGURE_SPEC_RULES).toContain('小数乘法按末位数字对齐');
+        expect(FIGURE_SPEC_RULES).toContain('小数点和正负号不计入乘数的数字位数');
     });
 });

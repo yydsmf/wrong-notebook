@@ -54,7 +54,7 @@ function parseNumericLabel(value: string): NumericLabel {
 function parseLengthLabel(value: string | undefined): LengthLabel {
     if (!value || value.length > 80) return { kind: 'unknown' };
     // 只接受完整数值和有限的长度前缀，不从公式、面积或说明中抽取数字。
-    const text = value.trim().replace(/^(?:(?:边长|棱长|弦长|长度|半径|直径|上底|下底|长|宽|高|底)(?:为|是)?\s*[:：=＝]?\s*|[rd]\s*=\s*)/i, '');
+    const text = value.trim().replace(/^(?:(?:边长|棱长|弦长|长度|半径|直径|高度|母线长|母线|上底|下底|长|宽|高|底)(?:为|是)?\s*[:：=＝]?\s*|(?:slant\s+height|radius|diameter|height)\b\s*(?:(?:is|of)\b\s*)?[:：=＝]?\s*|[rdhl]\s*=\s*)/i, '');
     const match = text.match(/^(.*?)\s*(毫米|厘米|分米|千米|公里|米|mm|cm|dm|km|m)?$/i);
     if (!match) return { kind: 'unknown' };
     const number = parseNumericLabel(match[1]);
@@ -67,6 +67,13 @@ function parseLengthLabel(value: string | undefined): LengthLabel {
         denominator: number.denominator,
         unit: unit ? 'metric' : 'unitless',
     };
+}
+
+function parseFigureLength(measurement: FigureLength): LengthLabel {
+    const parsed = parseLengthLabel(measurement.label);
+    return parsed.kind === 'length'
+        ? { ...parsed, denominator: parsed.denominator * BigInt(measurement.multiple ?? 1) }
+        : parsed;
 }
 
 /** 只核对结构必然成立的长度关系；换算仅用于比较，不改写标签或补单位。 */
@@ -85,6 +92,23 @@ export function validateFigureLengths(measurements: readonly FigureLength[], equ
     return true;
 }
 
+/** 完整三边在同一单位类别中均有明确值时，精确核对三角形不等式。 */
+export function validateFigureTriangleLengths(sides: readonly (readonly FigureLength[])[]): boolean {
+    if (sides.length !== 3 || !sides.every((side) => validateFigureLengths(side, true))) return false;
+    const parsed = sides.map((side) => side.map(parseFigureLength));
+    for (const unit of ['metric', 'unitless'] as const) {
+        const known = parsed.map((side) => side.find((value): value is Extract<LengthLabel, { kind: 'length' }> =>
+            value.kind === 'length' && value.unit === unit));
+        const [a, b, c] = known;
+        if (!a || !b || !c) continue;
+        const first = a.numerator * b.denominator * c.denominator;
+        const second = b.numerator * a.denominator * c.denominator;
+        const third = c.numerator * a.denominator * b.denominator;
+        if (first + second <= third || first + third <= second || second + third <= first) return false;
+    }
+    return true;
+}
+
 /** 仅在同一单位类别的三条完整边均有明确值时精确核对勾股关系，不补单位或求未知数。 */
 export function validateFigureRightTriangleLengths(
     firstLeg: readonly FigureLength[],
@@ -93,7 +117,7 @@ export function validateFigureRightTriangleLengths(
 ): boolean {
     const sides = [firstLeg, secondLeg, hypotenuse];
     if (!sides.every((side) => validateFigureLengths(side, true))) return false;
-    const parsed = sides.map((side) => side.map((measurement) => parseLengthLabel(measurement.label)));
+    const parsed = sides.map((side) => side.map(parseFigureLength));
     for (const unit of ['metric', 'unitless'] as const) {
         const known = parsed.map((side) => side.find((value): value is Extract<LengthLabel, { kind: 'length' }> =>
             value.kind === 'length' && value.unit === unit));
@@ -143,12 +167,22 @@ export function validateCircleLengths(circle: CircleLengths): boolean {
     return [...segments.values()].every((labels) => validateFigureLengths(labels, true));
 }
 
+/** 只精确比较带度数单位的完整数值；裸数字可能是角编号，未知式不求值。 */
+export function validateFigureAngleLabels(labels: readonly { label?: string }[]): boolean {
+    let known: Extract<NumericLabel, { kind: 'number' }> | undefined;
+    for (const { label } of labels) {
+        const match = label?.trim().match(/^(.*?)\s*(?:°|度|degrees?)$/iu);
+        if (!match) continue;
+        const value = parseNumericLabel(match[1]!);
+        if (value.kind === 'invalid') return false;
+        if (value.kind !== 'number') continue;
+        if (known && known.numerator * value.denominator !== value.numerator * known.denominator) return false;
+        known = value;
+    }
+    return true;
+}
+
 /** 裸数字可能是角编号，只有带明确度数单位的数值才与直角标记核对。 */
 export function validateRightAngleLabel(label: string | undefined): boolean {
-    if (!label) return true;
-    const match = label.match(/^(.*?)\s*(?:°|度)$/);
-    if (!match) return true;
-    const number = parseNumericLabel(match[1]);
-    if (number.kind === 'unknown') return true;
-    return number.kind === 'number' && number.numerator === BigInt(90) * number.denominator;
+    return validateFigureAngleLabels([{ label }, { label: '90°' }]);
 }

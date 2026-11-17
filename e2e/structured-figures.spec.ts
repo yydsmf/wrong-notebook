@@ -80,7 +80,7 @@ for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', widt
                 const grid = fixture.type === 'grid_shape' ? fixture.spec as {
                     rows: number; cols: number; cellLabels: Array<{ row: number; col: number; text: string }>;
                 } : null;
-                const layoutProblems = await page.evaluate(async ({ markup, tableRows, expectedTexts, unbrokenText, checkCircleLabels, grid, figureType }) => {
+                const layoutProblems = await page.evaluate(async ({ markup, tableRows, expectedTexts, unbrokenText, checkCircleLabels, grid, figureType, arithmeticAlignment }) => {
                     const parsed = new DOMParser().parseFromString(markup, 'image/svg+xml');
                     if (parsed.querySelector('parsererror')) return ['SVG 文档解析失败'];
                     const inlineSvg = document.importNode(parsed.documentElement, true);
@@ -96,7 +96,7 @@ for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', widt
                         const issues: string[] = [];
                         const bounds = inlineSvg.viewBox.baseVal;
                         const texts = Array.from(inlineSvg.querySelectorAll('text'));
-                        const geometry = ['basic_geometry', 'circle_geometry', 'coordinate_plane'].includes(figureType);
+                        const geometry = ['basic_geometry', 'circle_geometry', 'coordinate_plane', 'number_line'].includes(figureType);
                         if (geometry) {
                             const shapes = Array.from(inlineSvg.querySelectorAll<SVGGraphicsElement>('line, path, circle, polygon, polyline'));
                             for (const shape of shapes) {
@@ -107,14 +107,14 @@ for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', widt
                                     || box.y + box.height + padding > bounds.y + bounds.height + 0.5) issues.push('收紧画布裁掉了题图图元或描边');
                             }
                         }
-                        if (checkCircleLabels) {
+                        if (checkCircleLabels || figureType === 'number_line') {
                             for (const [index, first] of texts.entries()) {
                                 const firstBox = first.getBBox();
                                 for (const second of texts.slice(index + 1)) {
                                     const secondBox = second.getBBox();
                                     const width = Math.min(firstBox.x + firstBox.width, secondBox.x + secondBox.width) - Math.max(firstBox.x, secondBox.x);
                                     const height = Math.min(firstBox.y + firstBox.height, secondBox.y + secondBox.height) - Math.max(firstBox.y, secondBox.y);
-                                    if (width > 0.5 && height > 0.5) issues.push(`圆几何标注重叠：“${first.textContent}”与“${second.textContent}”`);
+                                    if (width > 0.5 && height > 0.5) issues.push(`图形标注重叠：“${first.textContent}”与“${second.textContent}”`);
                                 }
                             }
                         }
@@ -136,6 +136,29 @@ for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', widt
                                 const lines = element.querySelectorAll('tspan');
                                 return lines.length ? Array.from(lines).some((line) => line.textContent?.includes(token)) : element.textContent?.includes(token);
                             })) issues.push(`数值或符号被拆行：${token}`);
+                        }
+                        if (arithmeticAlignment === 'decimal') {
+                            const rows = texts.filter((element) => element.getAttribute('data-arithmetic-row') && element.textContent);
+                            const centerOfChar = (element: SVGTextElement, index: number) => {
+                                const start = element.getStartPositionOfChar(index);
+                                const end = element.getEndPositionOfChar(index);
+                                return (start.x + end.x) / 2;
+                            };
+                            const decimalRows = rows.filter((element) => element.textContent!.includes('.'));
+                            const decimalPositions = decimalRows.map((element) => centerOfChar(element, element.textContent!.indexOf('.')));
+                            if (decimalRows.length < 2 || decimalPositions.some((position) => !Number.isFinite(position))) {
+                                issues.push('小数竖式缺少可测量的小数点字符');
+                            } else {
+                                const decimal = decimalPositions[0]!;
+                                if (decimalPositions.some((position) => Math.abs(position - decimal) > 0.75)) issues.push('浏览器实际字形的小数点没有对齐');
+                                const top = decimalRows[0]!;
+                                const topSeparator = top.textContent!.indexOf('.');
+                                const unit = centerOfChar(top, topSeparator - 1);
+                                const integerRows = rows.filter((element) => !element.textContent!.includes('.'));
+                                if (integerRows.some((element) => Math.abs(centerOfChar(element, element.textContent!.length - 1) - unit) > 0.75)) {
+                                    issues.push('浏览器实际字形的整数个位没有对齐到小数点左侧');
+                                }
+                            }
                         }
                         if (grid) {
                             const cells = Array.from(inlineSvg.querySelectorAll<SVGRectElement>('rect[stroke="#111827"]'));
@@ -180,12 +203,12 @@ for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', widt
                     } finally {
                         host.remove();
                     }
-                }, { markup: svg!, tableRows: table ? [table.headers, ...table.rows] : null, expectedTexts: fixture.mustHaveText ?? [], unbrokenText: fixture.unbrokenText ?? [], checkCircleLabels: fixture.type === 'circle_geometry', grid, figureType: fixture.type });
+                }, { markup: svg!, tableRows: table ? [table.headers, ...table.rows] : null, expectedTexts: fixture.mustHaveText ?? [], unbrokenText: fixture.unbrokenText ?? [], checkCircleLabels: fixture.type === 'circle_geometry', grid, figureType: fixture.type, arithmeticAlignment: fixture.arithmeticAlignment });
                 expect(layoutProblems, `${fixture.id} 的文字应完整且位于画布及单元格内`).toEqual([]);
                 const labelProblems = await page.evaluate(inspectFigureLabels, { markup: svg! });
                 expect(labelProblems, `${fixture.id} 的几何标注应避开图元及其它文字并保留归属`).toEqual([]);
 
-                if (['primary-triangle-side-lengths', 'junior-circle-name-overlap', 'junior-title-coordinate'].includes(fixture.id)) {
+                if (['primary-table-narrow-chinese', 'primary-triangle-side-lengths', 'junior-circle-name-overlap', 'junior-title-coordinate', 'primary-vertical-decimal-addition'].includes(fixture.id)) {
                     const readability = await image.evaluate(async (element, markup) => {
                         const image = element as HTMLImageElement;
                         const parsed = new DOMParser().parseFromString(markup, 'image/svg+xml');
@@ -206,6 +229,11 @@ for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', widt
                         svg.setAttribute('viewBox', '0 0 800 500');
                         const background = svg.querySelector('rect')!;
                         for (const [name, value] of Object.entries({ x: '0', y: '0', width: '800', height: '500' })) background.setAttribute(name, value);
+                        // 基线必须模拟未启用阅读放大的原始题图尺寸，不能继承当前图片的放大 width。
+                        control.style.width = 'auto';
+                        control.style.maxWidth = '100%';
+                        control.style.maxHeight = '360px';
+                        control.style.zoom = '1';
                         control.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
                         host.append(control);
                         document.body.append(host);

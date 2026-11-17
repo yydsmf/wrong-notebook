@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { STRUCTURED_FIGURE_FIXTURES } from '@/__tests__/fixtures/figure-spec-fixtures';
+import { parseFigure } from '@/lib/ai/schema';
 import { parseFigureSpec, parseFigureSpecDetailed, renderFigureSpec, renderFigureSpecDetailed } from '@/lib/figure-spec';
 
 describe('structured figure specs', () => {
@@ -143,6 +144,35 @@ describe('structured figure specs', () => {
         expect(Math.abs(Number(label.getAttribute('y')) - 250)).toBeLessThan(40);
     });
 
+    it('混合圆图的扇形说明与相邻弦保留清晰间距', () => {
+        const fixture = STRUCTURED_FIGURE_FIXTURES.find((item) => item.id === 'junior-circle-mixed-lengths')!;
+        const svg = renderFigureSpec(JSON.stringify(fixture.spec));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const label = document.querySelector('text[data-figure-label="sector"]')!;
+        const box = {
+            left: Number(label.getAttribute('x')) - 18,
+            top: Number(label.getAttribute('y')) - 21.6,
+            width: 36,
+            height: 28.8,
+        };
+        const chord = { from: { x: 517, y: 250 }, to: { x: 400, y: 133 } };
+        const right = box.left + box.width;
+        const bottom = box.top + box.height;
+        let start = 0;
+        let end = 1;
+        for (const [origin, delta, lower, upper] of [
+            [chord.from.x, chord.to.x - chord.from.x, box.left - 8, right + 8],
+            [chord.from.y, chord.to.y - chord.from.y, box.top - 8, bottom + 8],
+        ]) {
+            const first = (lower - origin) / delta;
+            const second = (upper - origin) / delta;
+            start = Math.max(start, Math.min(first, second));
+            end = Math.min(end, Math.max(first, second));
+        }
+        expect(start > end).toBe(true);
+    });
+
     it('renders a vertical arithmetic layout without relying on AI SVG coordinates', () => {
         const svg = renderFigureSpec(JSON.stringify({
             type: 'vertical_arithmetic',
@@ -198,6 +228,35 @@ describe('structured figure specs', () => {
         }))).toBeNull();
     });
 
+    it.each([
+        { numerator: 'x', denominator: '4', parts: 4, filled: 2 },
+        { numerator: '1+1', denominator: '4', parts: 4, filled: 2 },
+        { numerator: '2', denominator: 'x+2', parts: 4, filled: 2 },
+        { numerator: '2.0', denominator: '4', parts: 4, filled: 2 },
+        { numerator: '−1', denominator: '4', parts: 4, filled: 0 },
+    ])('不确定或非非负整数分数不能生成带涂色的分数图：$numerator/$denominator', (fraction) => {
+        for (const model of ['bar', 'circle'] as const) {
+            const raw = JSON.stringify({ type: 'fraction', ...fraction, model });
+            expect(parseFigureSpec(raw)).toBeNull();
+            expect(parseFigure('true', '<svg><text>完整旧分数图</text></svg>', raw).figureSvg).toContain('完整旧分数图');
+            expect(parseFigure('true', null, raw).figureSvg).toBeNull();
+            const group = JSON.stringify({ type: 'figure_group', figures: [
+                { label: 'A', figure: { type: 'fraction', numerator: '1', denominator: '2' } },
+                { label: 'B', figure: { type: 'fraction', ...fraction, model } },
+            ] });
+            expect(parseFigure('true', '<svg><text>完整旧图组</text></svg>', group).figureSvg).toContain('完整旧图组');
+        }
+    });
+
+    it('接受带正号的明确整数分数，同时保留普通上下结构对未知表达式的支持', () => {
+        expect(parseFigureSpec(JSON.stringify({
+            type: 'fraction', numerator: '+3', denominator: '+4', model: 'bar', parts: 4, filled: 3,
+        }))).not.toBeNull();
+        expect(parseFigureSpec(JSON.stringify({
+            type: 'fraction', numerator: 'x+1', denominator: 'x+2', model: 'fraction',
+        }))).not.toBeNull();
+    });
+
     it.each([1, 4, 24])('shades the entire fraction circle when all %i parts are filled', (parts) => {
         const svg = renderFigureSpec(JSON.stringify({
             type: 'fraction', numerator: String(parts), denominator: String(parts), model: 'circle', parts, filled: parts,
@@ -251,6 +310,56 @@ describe('structured figure specs', () => {
         }))).toBeNull();
     });
 
+    it.each([
+        {
+            type: 'basic_geometry',
+            points: [{ id: 'A', x: 10, y: 10 }, { id: 'B', x: 80, y: 80 }],
+            segments: [{ from: 'A', to: 'B', label: '5厘米' }, { from: 'B', to: 'A', label: '5厘米' }],
+        },
+        {
+            type: 'basic_geometry',
+            points: [{ id: 'A', x: 10, y: 10 }, { id: 'B', x: 80, y: 80 }],
+            segments: [{ from: 'A', to: 'B', label: '5厘米' }, { from: 'B', to: 'A', label: '6厘米', dashed: true }],
+        },
+        {
+            type: 'basic_geometry',
+            points: [{ id: 'A', x: 10, y: 10 }, { id: 'B', x: 80, y: 80 }],
+            segments: [{ from: 'A', to: 'B', label: '5厘米' }, { from: 'B', to: 'A', label: '6厘米' }],
+        },
+        {
+            type: 'coordinate_plane',
+            xMin: 0, xMax: 10, yMin: 0, yMax: 10, xStep: 2, yStep: 2,
+            points: [{ id: 'A', x: 2, y: 2 }, { id: 'B', x: 8, y: 8 }],
+            segments: [{ from: 'A', to: 'B' }, { from: 'B', to: 'A' }],
+        },
+    ])('rejects exact duplicate undirected segments instead of drawing one edge twice', (spec) => {
+        expect(parseFigureSpec(JSON.stringify(spec))).toBeNull();
+    });
+
+    it('keeps a single labeled segment on a polygon boundary', () => {
+        const spec = {
+            type: 'basic_geometry',
+            points: [
+                { id: 'A', x: 10, y: 10 }, { id: 'B', x: 80, y: 10 },
+                { id: 'C', x: 80, y: 80 }, { id: 'D', x: 10, y: 80 },
+            ],
+            polygons: [{ points: ['A', 'B', 'C', 'D'] }],
+            segments: [{ from: 'A', to: 'B', label: '5厘米' }],
+        };
+        expect(parseFigureSpec(JSON.stringify(spec))).not.toBeNull();
+        expect(renderFigureSpec(JSON.stringify(spec))).toContain('>5厘米</text>');
+    });
+
+    it('保留同一条边上不同且不矛盾的标签', () => {
+        const spec = {
+            type: 'basic_geometry',
+            points: [{ id: 'A', x: 10, y: 10 }, { id: 'B', x: 80, y: 80 }],
+            segments: [{ from: 'A', to: 'B', label: '5厘米' }, { from: 'B', to: 'A', label: '50毫米' }],
+        };
+        expect(parseFigureSpec(JSON.stringify(spec))).not.toBeNull();
+        expect(renderFigureSpec(JSON.stringify(spec))).not.toBeNull();
+    });
+
     it('rejects self-intersecting polygons and coincident geometry points', () => {
         expect(parseFigureSpec(JSON.stringify({
             type: 'basic_geometry',
@@ -292,6 +401,33 @@ describe('structured figure specs', () => {
         expect(svg).not.toMatch(/NaN|Infinity|undefined/);
     });
 
+    it('柱状图数据值不落入柱体或相邻文字框', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'bar_chart', categories: ['甲', '乙', '丙'], values: [4, 2, 5], unit: '个', title: '数量',
+        }));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const bars = Array.from(document.querySelectorAll('rect')).filter((element) => element.getAttribute('fill') === '#dbeafe');
+        const valueLabels = Array.from(document.querySelectorAll('text')).filter((element) => ['4', '2', '5'].includes(element.textContent ?? ''));
+        expect(bars).toHaveLength(3);
+        expect(valueLabels).toHaveLength(3);
+        for (const value of ['4', '2', '5']) {
+            const label = Array.from(document.querySelectorAll('text')).find((element) => element.textContent === value);
+            expect(label, `缺少柱状图数据值 ${value}`).not.toBeUndefined();
+            const x = Number(label?.getAttribute('x'));
+            const y = Number(label?.getAttribute('y'));
+            const width = value.length * 16 * 0.62;
+            const box = { left: x - width / 2, right: x + width / 2, top: y - 16 * 1.2, bottom: y + 16 * 0.4 };
+            expect(bars.every((bar) => {
+                const left = Number(bar.getAttribute('x'));
+                const right = left + Number(bar.getAttribute('width'));
+                const top = Number(bar.getAttribute('y'));
+                const bottom = top + Number(bar.getAttribute('height'));
+                return box.right <= left || box.left >= right || box.bottom <= top || box.top >= bottom;
+            }), `数据值 ${value} 不能落入柱体`).toBe(true);
+        }
+    });
+
     it('falls back when a chart category cannot fit within the bounded label area', () => {
         expect(renderFigureSpec(JSON.stringify({
             type: 'bar_chart',
@@ -302,6 +438,18 @@ describe('structured figure specs', () => {
                 '第四个长度明显超过图表标签区域的分类名称',
             ],
             values: [1, 2, 3, 4],
+        }))).toBeNull();
+    });
+
+    it('图表数据值、单位或标题低于最小可读字号时整图回退', () => {
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'bar_chart', categories: Array.from({ length: 20 }, (_, index) => String(index + 1)), values: Array<number>(20).fill(123456),
+        }))).toBeNull();
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'line_chart', categories: ['一', '二'], values: [1, 2], unit: '这是一个无法在单位区域完整显示的单位',
+        }))).toBeNull();
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'bar_chart', categories: ['一'], values: [1], title: '长'.repeat(60),
         }))).toBeNull();
     });
 
@@ -460,6 +608,33 @@ describe('structured figure specs', () => {
         }))).toBeNull();
     });
 
+    it('密集表格仍保持至少 12px 正文字号，能容纳时不因行数丢失可读性', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'table',
+            headers: ['项目', '数量'],
+            rows: Array.from({ length: 30 }, (_, index) => [`项目${index + 1}`, String(index + 1)]),
+        }));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const texts = Array.from(document.querySelectorAll('text'));
+        expect(texts).toHaveLength(62);
+        expect(texts.map((element) => element.textContent)).toContain('项目30');
+        const fonts = texts.map((element) => Number(element.getAttribute('font-size')));
+        expect(Math.min(...fonts)).toBeGreaterThanOrEqual(12);
+    });
+
+    it('直接排版的长说明无法达到可读字号时整图回退', () => {
+        const raw = JSON.stringify({
+            type: 'fraction',
+            numerator: '1',
+            denominator: '2',
+            label: '说明'.repeat(30),
+            model: 'fraction',
+        });
+        expect(parseFigureSpec(raw)).not.toBeNull();
+        expect(renderFigureSpecDetailed(raw)).toMatchObject({ svg: null, diagnostic: { reason: 'renderer_unavailable' } });
+    });
+
     it('rejects number-line points outside the declared range', () => {
         expect(parseFigureSpec(JSON.stringify({
             type: 'number_line',
@@ -477,6 +652,86 @@ describe('structured figure specs', () => {
             max: 80,
             step: 1,
         }))).toBeNull();
+    });
+
+    it('数轴点名低于最小可读字号时回退，不输出细小文字', () => {
+        const raw = JSON.stringify({
+            type: 'number_line', min: 0, max: 4, step: 1,
+            points: [{ value: 2, label: '这是一个过长的数轴点名称' }],
+        });
+        expect(parseFigureSpec(raw)).not.toBeNull();
+        expect(renderFigureSpecDetailed(raw)).toMatchObject({ svg: null, diagnostic: { reason: 'renderer_unavailable' } });
+    });
+
+    it('密集负数数轴统一调整字号，完整保留所有可读刻度', () => {
+        const svg = renderFigureSpec(JSON.stringify({ type: 'number_line', min: -12, max: 12, step: 1 }));
+        expect(svg).not.toBeNull();
+        const texts = Array.from(new DOMParser().parseFromString(svg!, 'image/svg+xml').querySelectorAll('text'));
+        expect(texts.map((element) => element.textContent)).toEqual(Array.from({ length: 25 }, (_, index) => String(index - 12)));
+        const sizes = texts.map((element) => Number(element.getAttribute('font-size')));
+        expect(new Set(sizes).size).toBe(1);
+        expect(sizes[0]).toBeGreaterThanOrEqual(12);
+        expect(sizes[0]).toBeLessThan(18);
+    });
+
+    it('数轴在最小字号仍无法容纳相邻数值时整图回退', () => {
+        const raw = JSON.stringify({ type: 'number_line', min: 10000000000, max: 10000000024, step: 1 });
+        expect(parseFigureSpec(raw)).not.toBeNull();
+        expect(renderFigureSpecDetailed(raw)).toMatchObject({ svg: null, diagnostic: { reason: 'renderer_unavailable' } });
+    });
+
+    it.each([
+        { min: 0, max: 0.3, step: 0.1, expected: ['0', '0.1', '0.2', '0.3'] },
+        { min: 0, max: 0.00003, step: 0.00001, expected: ['0', '0.00001', '0.00002', '0.00003'] },
+    ])('小数数轴完整保留刻度值和端点：$max / $step', ({ min, max, step, expected }) => {
+        const svg = renderFigureSpec(JSON.stringify({ type: 'number_line', min, max, step }));
+        expect(svg).not.toBeNull();
+        const texts = Array.from(new DOMParser().parseFromString(svg!, 'image/svg+xml').querySelectorAll('text'));
+        expect(texts.map((element) => element.textContent)).toEqual(expected);
+    });
+
+    it('坐标轴使用同样的完整小数刻度，不因浮点除法遗漏末端', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'coordinate_plane', xMin: 0, xMax: 0.3, xStep: 0.1, yMin: 0, yMax: 0.3, yStep: 0.1,
+        }));
+        expect(svg).not.toBeNull();
+        const texts = Array.from(new DOMParser().parseFromString(svg!, 'image/svg+xml').querySelectorAll('text'));
+        expect(texts.map((element) => element.textContent)).toEqual(['0', '0.1', '0.2', '0.3', '0.1', '0.2', '0.3']);
+    });
+
+    it('接近零但不等于零的纵轴刻度仍显示原值', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'coordinate_plane', xMin: 0, xMax: 2, xStep: 1, yMin: 0.001, yMax: 2.001, yStep: 1,
+        }));
+        expect(svg).not.toBeNull();
+        const texts = Array.from(new DOMParser().parseFromString(svg!, 'image/svg+xml').querySelectorAll('text'));
+        expect(texts.map((element) => element.textContent)).toEqual(['0', '1', '2', '0.001', '1.001', '2.001']);
+    });
+
+    it.each([
+        ['横轴不包含零', { xMin: 1, xMax: 3, xStep: 1 }],
+        ['横轴跨零但步长跳过零', { xMin: -4, xMax: 5, xStep: 3 }],
+        ['横轴已经包含零', { xMin: -2, xMax: 2, xStep: 1 }],
+    ] as const)('%s 时坐标轴保留唯一的原点零刻度标签', (_scenario, range) => {
+        const result = renderFigureSpecDetailed(JSON.stringify({
+            type: 'coordinate_plane',
+            ...range,
+            yMin: -1,
+            yMax: 1,
+            yStep: 1,
+        }));
+        const svg = result.svg;
+        expect(svg, `${JSON.stringify(range)}: ${JSON.stringify(result.diagnostic)}`).not.toBeNull();
+        const texts = Array.from(new DOMParser().parseFromString(svg!, 'image/svg+xml').querySelectorAll('text'));
+        expect(texts.filter((element) => element.textContent === '0')).toHaveLength(1);
+        if (range.xMin > 0) expect(texts.map((element) => element.textContent)).toContain('-1');
+    });
+
+    it.each(['number_line', 'coordinate_plane'])('%s 精确核对 25 个刻度的容量，不接受少算一个的溢出输入', (type) => {
+        const spec = type === 'number_line'
+            ? { type, min: 0.3, max: 2.8, step: 0.1 }
+            : { type, xMin: 0.3, xMax: 2.8, xStep: 0.1, yMin: 0, yMax: 2, yStep: 1 };
+        expect(parseFigureSpec(JSON.stringify(spec))).toBeNull();
     });
 
     it('rejects grid cells outside the declared grid instead of silently dropping them', () => {
@@ -638,6 +893,57 @@ describe('structured figure specs', () => {
         expect(axis).not.toBeNull();
         expect(firstPoint).not.toBeNull();
         expect(Number(firstPoint![1])).toBeGreaterThan(100);
+    });
+
+    it('保留小数折线图的实际上限，不把 0.5 的数据压到 1 的一半以下', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'line_chart', categories: ['一', '二'], values: [0.2, 0.5],
+        }));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const points = Array.from(document.querySelectorAll('circle[r="5"]'), (element) => Number(element.getAttribute('cy')));
+        expect(points).toHaveLength(2);
+        expect(points[1]).toBe(70);
+        expect(points[0]).toBeGreaterThan(points[1]);
+    });
+
+    it('保留全负数折线图的零基线，不生成错误的正数上限', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'line_chart', categories: ['一', '二'], values: [-5, -3],
+        }));
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const points = Array.from(document.querySelectorAll('circle[r="5"]'), (element) => Number(element.getAttribute('cy')));
+        expect(points).toEqual([400, 268]);
+    });
+
+    it('允许明确声明全负数折线图的负数上限', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'line_chart', categories: ['一', '二'], values: [-5, -3], minValue: -6, maxValue: -2,
+        }));
+        expect(svg).not.toBeNull();
+        expect(svg).toContain('cy="317.5"');
+        expect(svg).toContain('cy="152.5"');
+    });
+
+    it('折线数据标签避开线段和相邻分类文字，无法排版时整图回退', () => {
+        const readable = renderFigureSpec(JSON.stringify({
+            type: 'line_chart', categories: ['一月', '二月', '三月'], values: [2, 5, 3],
+        }));
+        expect(readable).not.toBeNull();
+        const dense = renderFigureSpec(JSON.stringify({
+            type: 'line_chart', categories: Array.from({ length: 30 }, (_, index) => String(index + 1)), values: Array<number>(30).fill(1234),
+        }));
+        expect(dense).toBeNull();
+    });
+
+    it('折线极值标签与标题或坐标轴无法同时避让时整图回退', () => {
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'line_chart', categories: ['一', '二'], values: [1, 1], title: '图表标题',
+        }))).not.toBeNull();
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'line_chart', categories: Array.from({ length: 20 }, (_, index) => String(index + 1)), values: Array<number>(20).fill(1234), title: '图表标题',
+        }))).toBeNull();
     });
 
     it('renders a structured circle with radius, chord, diameter, arc and sector data', () => {
@@ -963,7 +1269,7 @@ describe('structured figure specs', () => {
             shape: 'parallelogram',
             width: 5,
             height: 4,
-            offset: 40,
+            offset: 51,
         }))).toBeNull();
     });
 
@@ -990,23 +1296,17 @@ describe('structured figure specs', () => {
         }))).toBeNull();
     });
 
-    it('rejects parallelograms and trapezoids whose height foot leaves the base', () => {
-        expect(parseFigureSpec(JSON.stringify({
-            type: 'area_geometry',
-            shape: 'parallelogram',
-            width: 6,
-            height: 4,
-            offset: 8,
-        }))).toBeNull();
-
-        expect(parseFigureSpec(JSON.stringify({
-            type: 'area_geometry',
-            shape: 'trapezoid',
-            width: 8,
-            height: 4,
-            topWidth: 5,
-            offset: 8,
-        }))).toBeNull();
+    it('renders base extensions when parallelogram and trapezoid height feet leave the base', () => {
+        for (const spec of [
+            { type: 'area_geometry', shape: 'parallelogram', width: 6, height: 4, offset: 8 },
+            { type: 'area_geometry', shape: 'trapezoid', width: 8, height: 4, topWidth: 5, offset: 8 },
+        ]) {
+            expect(parseFigureSpec(JSON.stringify(spec))).toMatchObject(spec);
+            const svg = renderFigureSpec(JSON.stringify(spec));
+            expect(svg).toContain('data-area-part="base-extension"');
+            expect(svg).toContain('data-area-part="height"');
+            expect(svg).toContain('data-area-part="right-angle"');
+        }
     });
 
     it('renders stable solid geometry for cuboids and cubes', () => {
@@ -1220,5 +1520,15 @@ describe('structured figure specs', () => {
         }
         const tooSmall = JSON.stringify({ type: 'basic_geometry', points: [{ id: 'O', x: 50, y: 50 }], circles: [{ center: 'O', radius: 4, label: '圆O' }] });
         expect(renderFigureSpec(tooSmall)).toBeNull();
+    });
+
+    it('几何点名低于最小可读字号时整图回退，不输出看似成功的细小文字', () => {
+        const raw = JSON.stringify({
+            type: 'coordinate_plane',
+            xMin: 0, xMax: 4, yMin: 0, yMax: 4,
+            points: [{ id: 'A', x: 1, y: 1, label: '这是一个过长的坐标点名称' }],
+        });
+        expect(parseFigureSpec(raw)).not.toBeNull();
+        expect(renderFigureSpecDetailed(raw)).toMatchObject({ svg: null, diagnostic: { reason: 'renderer_unavailable' } });
     });
 });

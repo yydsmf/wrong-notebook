@@ -84,7 +84,9 @@ export function QuestionFigure({ svg, images = [], scale, align, className, onRe
             style={reading ? { ...imageStyle, width: `calc(${reading.width}px + 1rem + 2px)`, maxWidth: "none", maxHeight: "none" } : imageStyle}
             onLoad={(event) => {
                 const image = event.currentTarget;
-                const size = getFigureReadingSize(svg, image.naturalWidth, image.naturalHeight);
+                const size = figureScale === 100
+                    ? getFigureReadingSize(svg, image.naturalWidth, image.naturalHeight, image.clientWidth, image.clientHeight)
+                    : null;
                 setReadingSize((previous) => size
                     ? previous?.svg === svg && previous.width === size.width ? previous : { svg, width: size.width }
                     : previous === null ? previous : null);

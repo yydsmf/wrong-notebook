@@ -1,4 +1,4 @@
-import { validateFigureLengths, validateFigureRightTriangleLengths } from './figure-measurements';
+import { validateFigureLengths, validateFigureRightTriangleLengths, validateFigureTriangleLengths } from './figure-measurements';
 
 export interface TriangleQuestionConstraint {
     isosceles: boolean;
@@ -24,7 +24,7 @@ export function validateFigureTriangle(
         y: points[(index + 1) % 3].y - point.y,
     }));
     const lengths = edges.map((edge) => Math.hypot(edge.x, edge.y));
-    if (lengths.some((length) => length <= 0) || !sides.every((side) => validateFigureLengths(side, true))) return false;
+    if (lengths.some((length) => length <= 0) || !validateFigureTriangleLengths(sides)) return false;
     if (constraint.equilateral && (!lengths.every((length) => equalLength(length, Math.max(...lengths)))
         || !validateFigureLengths(sides.flat(), true))) return false;
 

@@ -12,6 +12,27 @@ describe('配图默认阅读尺寸', () => {
         expect(getFigureReadingSize(wrap('<text font-size="20">长度</text>'), 800, 500)).toEqual({ width: 800, height: 500, minimumFontSize: 20 });
     });
 
+    it('按实际显示尺寸补偿窄屏或高度上限造成的整体缩小', () => {
+        const reading = getFigureReadingSize(wrap('<text font-size="12">窄表格</text>'), 800, 500, 576, 360);
+        expect(reading).not.toBeNull();
+        expect(reading!.width).toBeCloseTo(1111.1111, 4);
+        expect(reading!.height).toBeCloseTo(694.4444, 4);
+        expect(reading!.minimumFontSize).toBeCloseTo(16.6667, 4);
+        expect(getFigureReadingSize(wrap('<text font-size="12">窄表格</text>'), 800, 500, 800, 500)).toEqual({
+            width: 800, height: 500, minimumFontSize: 12,
+        });
+    });
+
+    it.each([[0, 0], [0, 500], [800, 0], [-1, 500], [NaN, 500], [800, Infinity]])(
+        '隐藏或未完成布局的图片 %s×%s 仍按可靠的原始尺寸提供阅读宽度',
+        (displayedWidth, displayedHeight) => {
+            const svg = wrap('<text font-size="8">稍后显示</text>');
+            expect(getFigureReadingSize(svg, 800, 500, displayedWidth, displayedHeight)).toEqual({
+                width: 1200, height: 750, minimumFontSize: 12,
+            });
+        },
+    );
+
     it('逐层计算子图共同缩放后的字号，不能只读取原始字号', () => {
         const svg = wrap('<svg width="400" height="250" viewBox="0 0 800 500"><g><svg width="400" height="250" viewBox="0 0 800 500"><text font-size="24">甲</text></svg></g></svg>');
         expect(getFigureReadingSize(svg, 800, 500)).toEqual({ width: 1600, height: 1000, minimumFontSize: 12 });

@@ -103,8 +103,8 @@ function segmentCrossesBox(from: FigurePoint, to: FigurePoint, box: FigureLabelB
     return true;
 }
 
-function overlapsObstacle(box: FigureLabelBox, obstacle: FigureLabelObstacle): boolean {
-    const padded = expanded(box, 3);
+function overlapsObstacle(box: FigureLabelBox, obstacle: FigureLabelObstacle, clearance = 3): boolean {
+    const padded = expanded(box, clearance);
     if (obstacle.type === 'box') return boxesOverlap(padded, obstacle.box);
     if (obstacle.type === 'segment') return segmentCrossesBox(obstacle.from, obstacle.to, padded);
 
@@ -300,7 +300,10 @@ export function layoutFigureGeometryLabels(
             >= Math.hypot(center.x - label.x, center.y - label.y) + Math.min(4, separation * 0.2);
     })));
     candidates.push(...segmentLabels.map((label) => segmentCandidates(label, obstacles).filter(isAvailable)));
-    candidates.push(...angularLabels.map((label) => angularCandidates(label).filter(isAvailable)));
+    candidates.push(...angularLabels.map((label) => angularCandidates(label).filter((box) => label.kind === 'sector'
+        ? inside(box, bounds) && !allObstacles.some((obstacle) => overlapsObstacle(box, obstacle, 8))
+        : isAvailable(box)
+    )));
     candidates.push(...circles.map((label) => circleCandidates(label, obstacles).filter((box) => isCircleLabelAvailable(label, box))));
     if (candidates.some((positions) => positions.length === 0)) return null;
     const placed = new Map<number, FigureLabelBox>();

@@ -78,6 +78,23 @@ describe('带分数图示', () => {
         expect(Array.from(document.querySelectorAll('text'), (element) => element.textContent)).toEqual(['a', 'x+1', 'y']);
     });
 
+    it('代数分数横线覆盖完整表达式，普通短分数保持原宽度', () => {
+        const renderBarWidth = (numerator: string, denominator: string, whole?: string) => {
+            const svg = renderFigureSpec(JSON.stringify({ type: 'fraction', numerator, denominator, whole, model: 'fraction' }));
+            expect(svg).not.toBeNull();
+            const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+            const bar = document.querySelector('line')!;
+            const x1 = Number(bar.getAttribute('x1'));
+            const x2 = Number(bar.getAttribute('x2'));
+            expect(x1 + x2).toBeCloseTo(whole ? 860 : 800, 10);
+            return x2 - x1;
+        };
+
+        expect(renderBarWidth('3', '4')).toBe(110);
+        expect(renderBarWidth('x+10000000000', 'y+1')).toBeGreaterThan(110);
+        expect(renderBarWidth('x+10000000000', 'y+1', '2')).toBeLessThanOrEqual(166);
+    });
+
     it('有效带分数可参与图组，无效子图不会只留下其它选项', () => {
         const raw = JSON.stringify({ type: 'figure_group', figures: MIXED_FRACTION_FIXTURES.slice(0, 2).map((fixture, index) => ({ label: 'AB'[index], figure: mixedFractionSpec(fixture) })) });
         const svg = renderFigureSpec(raw);
@@ -89,7 +106,7 @@ describe('带分数图示', () => {
 
     it.each(['bar', 'circle'])('%s 的剩余分数字符无法完整容纳时回退，不输出局部图形', (model) => {
         const raw = JSON.stringify({ type: 'fraction', model, whole: '5', numerator: '未'.repeat(18), denominator: '4', parts: 4, filled: 3 });
-        expect(parseFigureSpec(raw)).not.toBeNull();
+        expect(parseFigureSpec(raw)).toBeNull();
         expect(renderFigureSpec(raw)).toBeNull();
         expect(parseFigure('true', legacy, raw).figureSvg).toBe(legacy);
     });

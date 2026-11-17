@@ -1,9 +1,9 @@
 import type { FigureSpec } from './figure-spec';
-import { validateFigureLengths } from './figure-measurements';
+import { validateFigureLengths, validateFigureTriangleLengths } from './figure-measurements';
 import { validateFigureTriangle } from './figure-triangle-consistency';
 import type { TriangleQuestionConstraint } from './figure-triangle-consistency';
 
-export type PolygonQuestionShape = 'triangle' | 'rectangle' | 'square' | 'parallelogram' | 'trapezoid';
+export type PolygonQuestionShape = 'triangle' | 'rectangle' | 'square' | 'rhombus' | 'parallelogram' | 'trapezoid';
 type Geometry = Extract<FigureSpec, { type: 'basic_geometry' }>;
 type Point = Geometry['points'][number];
 interface Vector { x: number; y: number }
@@ -98,7 +98,8 @@ function matchesCornerShape(corners: readonly Point[], expected: PolygonQuestion
     if (expected === 'trapezoid') return firstParallel !== secondParallel;
     if (!firstParallel || !secondParallel) return false;
     if (expected === 'parallelogram') return true;
-    if (!edges.every((edge, index) => perpendicular(edge, edges[(index + 1) % edges.length]))) return false;
+    if (expected !== 'rhombus'
+        && !edges.every((edge, index) => perpendicular(edge, edges[(index + 1) % edges.length]))) return false;
     if (expected === 'rectangle') return true;
     const lengths = edges.map(length);
     return Math.max(...lengths) - Math.min(...lengths) <= RELATION_TOLERANCE * Math.max(...lengths);
@@ -111,8 +112,10 @@ function matchesSideLabels(spec: Geometry, corners: readonly Point[], expected: 
         return spec.segments.filter((segment) => (segment.from === point.id && segment.to === next.id)
             || (segment.to === point.id && segment.from === next.id));
     });
-    if (expected === 'triangle' && triangle) return validateFigureTriangle(corners, labels, triangle);
-    if (expected === 'square') return validateFigureLengths(labels.flat(), true);
+    if (expected === 'triangle') return triangle
+        ? validateFigureTriangle(corners, labels, triangle)
+        : validateFigureTriangleLengths(labels);
+    if (expected === 'square' || expected === 'rhombus') return validateFigureLengths(labels.flat(), true);
     if (expected === 'rectangle' || expected === 'parallelogram') {
         return validateFigureLengths([...labels[0], ...labels[2]], true)
             && validateFigureLengths([...labels[1], ...labels[3]], true);
@@ -120,8 +123,26 @@ function matchesSideLabels(spec: Geometry, corners: readonly Point[], expected: 
     return labels.every((side) => validateFigureLengths(side, true));
 }
 
+function matchesNamedCorners(corners: readonly Point[], names: readonly string[]): boolean {
+    if (corners.length !== names.length) return false;
+    const start = corners.findIndex((point) => point.label === names[0]);
+    if (start < 0) return false;
+    return [1, -1].some((direction) => names.every((name, index) => (
+        corners[(start + direction * index + corners.length) % corners.length].label === name
+    )));
+}
+
 /** 仅核对可明确对应的单个主多边形；复合或外部图元不推断主图归属。 */
-export function validateFigurePolygonShape(spec: Geometry, expected: PolygonQuestionShape, triangle?: TriangleQuestionConstraint): boolean {
+export function validateFigurePolygonShape(
+    spec: Geometry,
+    expected: PolygonQuestionShape,
+    triangle?: TriangleQuestionConstraint,
+    namedPoints?: readonly string[],
+): boolean {
+    if (namedPoints) {
+        const visibleNames = new Set(spec.points.map((point) => point.label));
+        if (namedPoints.some((name) => !visibleNames.has(name))) return false;
+    }
     if (spec.circles.length > 0) return true;
     let boundary: Point[];
     if (spec.polygons.length === 0) {
@@ -141,5 +162,6 @@ export function validateFigurePolygonShape(spec: Geometry, expected: PolygonQues
     }
     if (spec.points.some((point) => !containsPoint(boundary, point))) return true;
     const corners = polygonCorners(boundary);
-    return matchesCornerShape(corners, expected) && matchesSideLabels(spec, corners, expected, triangle);
+    return (!namedPoints || matchesNamedCorners(corners, namedPoints))
+        && matchesCornerShape(corners, expected) && matchesSideLabels(spec, corners, expected, triangle);
 }
