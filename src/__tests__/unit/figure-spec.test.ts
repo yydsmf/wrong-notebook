@@ -1471,11 +1471,45 @@ describe('structured figure specs', () => {
         expect(document.querySelectorAll('g[data-stacked-solid-part]')).toHaveLength(2);
         expect(document.querySelectorAll('g[data-stacked-solid-part="base"] polygon')).toHaveLength(3);
         expect(document.querySelectorAll('g[data-stacked-solid-part="top"] polygon')).toHaveLength(3);
+        const polygonPoints = (polygon: Element) => polygon.getAttribute('points')!.split(/\s+/u)
+            .map((point) => point.split(',').map(Number));
+        const baseSupport = polygonPoints(document.querySelector('g[data-stacked-solid-part="base"] polygon:nth-of-type(3)')!);
+        const topFront = polygonPoints(document.querySelector('g[data-stacked-solid-part="top"] polygon:nth-of-type(1)')!);
+        const topSide = polygonPoints(document.querySelector('g[data-stacked-solid-part="top"] polygon:nth-of-type(2)')!);
+        const topBackBottomRight = topSide[2]!;
+        const topBackBottomLeft = [
+            topBackBottomRight[0]! - (topFront[2]![0]! - topFront[3]![0]!),
+            topBackBottomRight[1]! - (topFront[2]![1]! - topFront[3]![1]!),
+        ];
+        const baseCenter = [0, 1].map((axis) => baseSupport.reduce((sum, point) => sum + point[axis]!, 0) / baseSupport.length);
+        const topFootprint = [topFront[3]!, topFront[2]!, topBackBottomRight, topBackBottomLeft];
+        const topCenter = [0, 1].map((axis) => topFootprint.reduce((sum, point) => sum + point[axis]!, 0) / topFootprint.length);
+        expect(topCenter[0]).toBeCloseTo(baseCenter[0], 6);
+        expect(topCenter[1]).toBeCloseTo(baseCenter[1], 6);
         for (const label of ['底长8', '底宽6', '底高4', '上长4', '上宽3', '上高3']) {
             expect(svg).toContain(`>${label}</text>`);
         }
         expect(svg).toContain('>两个长方体上下叠放</text>');
         expect(svg).toMatch(/stroke-dasharray="7 5"/);
+        expect(svg).not.toMatch(/NaN|Infinity|undefined/);
+    });
+
+    it.each([
+        [{ width: 10, depth: 8, height: 5 }, { width: 7, depth: 5, height: 2 }],
+        [{ width: 9, depth: 5, height: 3 }, { width: 8, depth: 4, height: 1.5 }],
+        [{ width: 8, depth: 6, height: 8 }, { width: 3, depth: 2, height: 4 }],
+        [{ width: 12, depth: 9, height: 3 }, { width: 4, depth: 3, height: 5 }],
+    ])('keeps stacked-solid labels renderable across dimension ratios (%o, %o)', (base, top) => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'stacked_solid',
+            base: { ...base, widthLabel: '底长', depthLabel: '底宽', heightLabel: '底高' },
+            top: { ...top, widthLabel: '上长', depthLabel: '上宽', heightLabel: '上高' },
+        }));
+
+        expect(svg).not.toBeNull();
+        expect(svg).toContain('data-stacked-solid-part="base"');
+        expect(svg).toContain('data-stacked-solid-part="top"');
+        for (const label of ['底长', '底宽', '底高', '上长', '上宽', '上高']) expect(svg).toContain(`>${label}</text>`);
         expect(svg).not.toMatch(/NaN|Infinity|undefined/);
     });
 

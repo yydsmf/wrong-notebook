@@ -3,11 +3,13 @@ import { validateFigureLengths } from './figure-measurements';
 
 type AreaGeometry = Extract<FigureSpec, { type: 'area_geometry' }>;
 type SolidGeometry = Extract<FigureSpec, { type: 'solid_geometry' }>;
+type StackedSolid = Extract<FigureSpec, { type: 'stacked_solid' }>;
 type RoundSolid = Extract<FigureSpec, { type: 'round_solid' }>;
 type SphereGeometry = Extract<FigureSpec, { type: 'sphere_geometry' }>;
 type Dimension = 'length' | 'width' | 'height' | 'depth' | 'base' | 'upper' | 'lower' | 'side' | 'edge' | 'radius' | 'diameter' | 'slant';
 type DimensionLabels = Partial<Record<Dimension, Array<string | undefined>>>;
-interface DimensionAssertion { dimension: Dimension; value: string }
+type StackedLayer = 'base' | 'top';
+interface DimensionAssertion { dimension: Dimension; value: string; layer?: StackedLayer }
 
 const ROLES: Record<string, Dimension> = {
     长: 'length', 长度: 'length', length: 'length',
@@ -27,7 +29,7 @@ const NUMBER_PATTERN = String.raw`[+−-]?(?:(?:\d+(?:\s+|又))?\d+\s*/\s*\d+|\d
 const VALUE_PATTERN = String.raw`${NUMBER_PATTERN}\s*(?:毫米|厘米|分米|千米|公里|米|mm|cm|dm|km|m)?`;
 const DIMENSION_VALUE_PATTERN = new RegExp(String.raw`(${NUMBER_PATTERN})\s*(毫米|厘米|分米|千米|公里|米|mm|cm|dm|km|m)?`, 'giu');
 const DIMENSION_LABEL_PREFIX = new RegExp(String.raw`^(${ROLE_PATTERN})\s*(?:(?:为|是|等于|[:：=＝]|\bis\b|\bof\b)\s*)?`, 'iu');
-const DIMENSION_BOUNDARY = String.raw`(?:^|[\s,，。;；:：]|的|\(|\[|\{|（|［|｛|【|〔|(?<=\d)|(?<=米)|(?<=里)|(?<=m))`;
+const DIMENSION_BOUNDARY = String.raw`(?:^|[\s,，。;；:：]|的|\(|\[|\{|（|［|｛|【|〔|(?<=\d)|(?<=米)|(?<=里)|(?<=m)|(?<=层))`;
 const DIMENSION_PATTERN = new RegExp(String.raw`${DIMENSION_BOUNDARY}(?:(?:其|它的|该图的)\s*|(?:its|the)\s+)?(${ROLE_PATTERN})\s*(?:(?:为|是|等于|=|:|\bis\b|\bof\b)\s*)?(${VALUE_PATTERN})`, 'giu');
 const NEXT_DIMENSION_PATTERN = new RegExp(String.raw`^\s*(?:${ROLE_PATTERN})`, 'iu');
 const ROLE_TOKEN_PATTERN = String.raw`(?:${ROLE_PATTERN})`;
@@ -38,6 +40,15 @@ const ENGLISH_ROLE_LIST_PATTERN = String.raw`${ENGLISH_ROLE_PATTERN}(?:${ENGLISH
 const ENGLISH_RESPECTIVE_LIST_PATTERN = new RegExp(String.raw`(${ENGLISH_ROLE_LIST_PATTERN})\s+(?:are|is)\s+(.+?)\s+respectively\b`, 'iu');
 const UNCERTAIN_CONTEXT = /是否|是不是|判断|能否|请问|试问|证明|猜测|认为|声称|如果|假设|假如|若|并非|不是|不为|不一定|未必|[“”‘’「」『』"`]|\b(?:which|whether|if|when|unless|prove|show|assum\w*|suppos\w*|determine|decide|judge|claims?|says?|not|could|might|may)\b/iu;
 const OTHER_FIGURE_CONTEXT = /另一个|另一(?:个|张|块|幅|种)|其他|其它|其余|第二|第三|下列|选项|候选|\b(?:another|other|second|third|options?|choose|select)\b/iu;
+const STACKED_LAYER_SCOPE_PATTERN = /底层|下层|底部|下部|底物体|下方(?:物体|长方体)|上层|顶层|上部|顶部|上物体|顶物体|上方(?:物体|长方体)|\b(?:base|bottom|lower)\s+(?:layer|solid|cuboid|block)\b|\b(?:top|upper)\s+(?:layer|solid|cuboid|block)\b/giu;
+
+function stackedLayerAt(text: string): StackedLayer | undefined {
+    let layer: StackedLayer | undefined;
+    for (const match of text.matchAll(STACKED_LAYER_SCOPE_PATTERN)) {
+        layer = /^(?:上|顶)|\b(?:top|upper)\b/iu.test(match[0]) ? 'top' : 'base';
+    }
+    return layer;
+}
 
 function extractDimensions(text: string): DimensionAssertion[] {
     const otherFigure = text.search(OTHER_FIGURE_CONTEXT);
@@ -56,14 +67,16 @@ function extractDimensions(text: string): DimensionAssertion[] {
             const afterDimensions = after.replace(/^[\s)\]}）］｝】〕]+/u, '');
             const continuesWithDimension = NEXT_DIMENSION_PATTERN.test(afterDimensions);
             // 只延续尺寸声明，不把后文新引入物体或辅助线的尺寸套给主图。
-            if (!/^[\s,，:：]*(?:(?:with|and)\s*)?$/iu.test(sentence.slice(consumed, match.index))) return assertions;
+            if (!/^[\s,，:：]*(?:(?:with|and)\s*)?$/iu.test(sentence.slice(consumed, match.index))
+                && !/^[\s,，:：]*(?:底|上|下)层\s*$/u.test(sentence.slice(consumed, match.index))) return assertions;
             if (UNCERTAIN_CONTEXT.test(before)
                 || (!continuesWithDimension && !/^\s*(?:$|[,，。;；!?！？]|\.(?!\d)|且|并且|\band\b)/iu.test(afterDimensions))
                 || /^\s*[,，]\s*\d/u.test(afterDimensions)
                 || /^\s*(?:[?？]|[,，]\s*(?:(?:这|这一|该)(?:句话|说法|结论))?\s*(?:对吗|对不对|正确吗|是否)|[,，]?\s*\b(?:if|when|correct|true\s+or\s+false|is\s+this\s+true)\b)/iu.test(afterDimensions)) continue;
             const dimension = ROLES[match[1]!.toLowerCase().replace(/\s+/gu, ' ')];
             if (dimension) {
-                assertions.push({ dimension, value: match[2]!.trim() });
+                const layer = stackedLayerAt(sentence.slice(0, match.index));
+                assertions.push({ dimension, value: match[2]!.trim(), ...(layer ? { layer } : {}) });
                 consumed = match.index + match[0].length;
             }
         }
@@ -79,7 +92,7 @@ function extractRespectiveDimensions(sentence: string): DimensionAssertion[] | n
     if (!match || UNCERTAIN_CONTEXT.test(sentence.slice(0, match.index))) return null;
     if (english && !/^[\s.]*$/u.test(sentence.slice(match.index + match[0].length))) return null;
     const prefix = sentence.slice(0, match.index);
-    if (!/^[\s,，:：]*(?:(?:其|它的|该图的|其长方体的|其正方体的|长方体的|正方体的|its|the|the figure's)\s*)?$/iu.test(prefix)) return null;
+    if (!/^[\s,，:：]*(?:(?:其|它的|该图的|其长方体的|其正方体的|长方体的|正方体的|底层|下层|上层|顶层|底部|下部|上部|顶部|its|the|the figure's)\s*)?$/iu.test(prefix)) return null;
 
     const rolesText = match[1]!;
     const valueText = chinese ? sentence.slice(match.index + match[0].length) : match[2]!;
@@ -106,7 +119,8 @@ function extractRespectiveDimensions(sentence: string): DimensionAssertion[] | n
     if (lastUnit && values.slice(0, -1).every((value) => !value[2])) {
         for (let index = 0; index < parsedValues.length - 1; index++) parsedValues[index] += lastUnit;
     }
-    return roles.map((dimension, index) => ({ dimension, value: parsedValues[index]! }));
+    const layer = stackedLayerAt(prefix);
+    return roles.map((dimension, index) => ({ dimension, value: parsedValues[index]!, ...(layer ? { layer } : {}) }));
 }
 
 function lengthWidthLabels(
@@ -145,10 +159,28 @@ function matchesDimensions(labels: DimensionLabels, assertions: readonly Dimensi
 
 /** 只核对主图声明后的明确尺寸标注；允许未指明方向的水平长宽互换，不补值或移动图形。 */
 export function validateFigureTemplateDimensions(
-    spec: AreaGeometry | SolidGeometry | RoundSolid | SphereGeometry,
+    spec: AreaGeometry | SolidGeometry | StackedSolid | RoundSolid | SphereGeometry,
     shape: AreaGeometry['shape'] | SolidGeometry['shape'] | RoundSolid['shape'] | 'rhombus' | 'sphere',
     dimensionText: string,
 ): boolean {
+    if (spec.type === 'stacked_solid') {
+        if (shape !== 'cuboid' && shape !== 'cube') return true;
+        const assertions = extractDimensions(dimensionText);
+        if (!assertions.length) return true;
+
+        return assertions.every(({ dimension, value, layer }) => {
+            const parts = layer === 'base' ? [spec.base] : layer === 'top' ? [spec.top] : [spec.base, spec.top];
+            const labels = parts.flatMap((part) => dimension === 'height'
+                ? [part.heightLabel]
+                : [part.widthLabel, part.depthLabel]);
+            // 长、宽、底、上下底在轴测图中的水平／深度方向可能互换；只有标注本身
+            // 明确写出角色时才限制到同名方向；题干明确层级时只比较对应物体，
+            // 避免上下层尺寸互换后仍被另一层的同类标签误通过。
+            const candidates = labels.filter((label) => labelAllowsRole(label, dimension));
+            return candidates.length === 0
+                || candidates.some((label) => validateFigureLengths([{ label }, { label: value }], true));
+        });
+    }
     if (spec.type === 'round_solid' || spec.type === 'sphere_geometry') {
         if (shape !== 'cylinder' && shape !== 'cone' && shape !== 'sphere') return true;
         const assertions = extractDimensions(dimensionText);

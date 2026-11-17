@@ -33,6 +33,19 @@ const QUESTION_SHAPE_PATTERNS: Array<{ shape: ExplicitQuestionShape; pattern: Re
     { shape: 'cone', pattern: /圆锥|\bcones?\b/iu },
     { shape: 'sphere', pattern: /(?<!半)球(?:体)?(?!面|冠|缺|壳)|\bspheres?\b/iu },
 ];
+const STACKED_CUBOID_ASSERTIONS = [
+    /(?:两个|两块|2\s*(?:个|块)|two)\s*(?:规则)?(?:长方体|cuboids?|rectangular prisms?)[^。！？?？;；]{0,20}?(?:上下)?(?:叠放|堆放|堆叠|stacked|on\s+top\s+of)/iu,
+    /(?:(?:一个|一块|a|one)\s*)?(?:规则)?(?:长方体|cuboids?|rectangular prisms?)[^。！？?？;；]{0,12}?(?:放在|放到|摆在|置于|叠在|叠放在|堆在|placed\s+on|stacked\s+on)[^。！？?？;；]{0,12}?(?:另一个|另一块|another|a\s+second)\s*(?:规则)?(?:长方体|cuboids?|rectangular prisms?)(?:上面|上方|上)?/iu,
+];
+
+function findStackedCuboidAssertion(questionText: string): RegExpExecArray | null {
+    let match: RegExpExecArray | null = null;
+    for (const pattern of STACKED_CUBOID_ASSERTIONS) {
+        const candidate = pattern.exec(questionText);
+        if (candidate && (match === null || candidate.index < match.index)) match = candidate;
+    }
+    return match;
+}
 
 const FIGURE_ASSERTION_PREFIX = String.raw`(?:(?:下图|该图|此图|图形|这(?:个|幅|张)?(?:图形|图)?)(?:所示)?(?:是|为)(?:一个|一块|一张)?(?<chineseModifiers>(?:等腰|等边|直角){0,3})|\b(?:(?:the\s+(?:figure|shape|diagram|solid))|(?:this(?:\s+(?:figure|shape|diagram|solid))?))\s+is\s+(?:a|an)\s+(?<englishModifiers>(?:(?:right(?:[-\s]+angled)?|isosceles|equilateral)[-\s]+){0,3}))`;
 const DIRECT_NAMED_SHAPE_PATTERNS: Array<{
@@ -145,6 +158,16 @@ function uniqueQuestionShape(questionText: string): QuestionShapeAssertion | nul
     const named = directNamedQuestionShape(questionText);
     if (named) return named;
     const candidate = shapes[0];
+    if (candidate.shape === 'cuboid') {
+        const stacked = findStackedCuboidAssertion(questionText);
+        if (stacked && !UNCERTAIN_ASSERTION_CONTEXT.test(questionText)
+            && !/["“”‘’「」『』`]/u.test(questionText)) {
+            return {
+                shape: 'cuboid',
+                dimensionText: questionText.slice(stacked.index + stacked[0].length),
+            };
+        }
+    }
     const assertion = new RegExp(`${FIGURE_ASSERTION_PREFIX}(?:${candidate.pattern.source})`, 'giu');
     // 小数点不截句，换行也可能只是转录折行；句尾提问不取消前一独立声明。
     const sentences = questionText.split(/(?<=[。!?;])|\.(?=\s|$)/u);
@@ -350,7 +373,8 @@ function validateSingleFigureQuestionConsistency(
             && validateFigureTemplateDimensions(spec, questionShape.shape, questionShape.dimensionText);
     }
     if (questionShape && spec.type === 'stacked_solid') {
-        return matchesStackedSolidShape(spec, questionShape.shape);
+        return matchesStackedSolidShape(spec, questionShape.shape)
+            && validateFigureTemplateDimensions(spec, questionShape.shape, questionShape.dimensionText);
     }
     if (questionShape && spec.type === 'round_solid') {
         return questionShape.shape === spec.shape

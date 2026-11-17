@@ -11,6 +11,11 @@ const cuboid = (widthLabel?: string, depthLabel?: string, heightLabel?: string) 
     type: 'solid_geometry', shape: 'cuboid', width: 60, depth: 40, height: 30,
     widthLabel, depthLabel, heightLabel,
 });
+const stackedCuboid = (base: Record<string, string>, top: Record<string, string>) => ({
+    type: 'stacked_solid',
+    base: { width: 8, depth: 6, height: 4, ...base },
+    top: { width: 4, depth: 3, height: 2, ...top },
+});
 const examples = [
     {
         name: '矩形长宽', spec: rectangle('6cm', '4cm'),
@@ -72,6 +77,49 @@ describe.each(examples)('题干与模板尺寸：$name', ({ spec, valid, invalid
 });
 
 describe('模板尺寸的单位、方向和归属', () => {
+    it('上下叠放长方体分别核对两层的长宽高，并识别组合标注前缀', () => {
+        const spec = stackedCuboid(
+            { widthLabel: '底长6厘米', depthLabel: '底宽4厘米', heightLabel: '底高3厘米' },
+            { widthLabel: '上长3厘米', depthLabel: '上宽2厘米', heightLabel: '上高2厘米' },
+        );
+        const valid = '下图是一个长方体，底层长6厘米，宽4厘米，高3厘米；上层长3厘米，宽2厘米，高2厘米。';
+        const invalid = '下图是一个长方体，底层长6厘米，宽4厘米，高3厘米；上层长3厘米，宽2厘米，高5厘米。';
+        expect(parseFigureSpec(raw(spec), valid)).not.toBeNull();
+        expect(parseFigureSpec(raw(spec), invalid)).toBeNull();
+    });
+
+    it('题干明确层级时，不允许上下两层尺寸互换后借另一层标注通过', () => {
+        const swapped = stackedCuboid(
+            { widthLabel: '底长3厘米', depthLabel: '底宽2厘米', heightLabel: '底高2厘米' },
+            { widthLabel: '上长6厘米', depthLabel: '上宽4厘米', heightLabel: '上高3厘米' },
+        );
+        const questions = [
+            '下图是两个长方体上下叠放，底层长6厘米，宽4厘米，高3厘米；上层长3厘米，宽2厘米，高2厘米。',
+            '下图中，一个长方体放在另一个长方体上，底层长6厘米，宽4厘米，高3厘米；上层长3厘米，宽2厘米，高2厘米。',
+            '把一个长方体叠放在另一个长方体上，底层长6厘米，宽4厘米，高3厘米；上层长3厘米，宽2厘米，高2厘米。',
+        ];
+        for (const question of questions) {
+            expect(parseFigureSpec(raw(swapped), question), question).toBeNull();
+            expect(parseFigureSpec(raw(swapped), `判断${question.slice(3)}是否正确？`), question).not.toBeNull();
+        }
+    });
+
+    it('压缩的分别尺寸列表也保留底层和上层的归属', () => {
+        const spec = stackedCuboid(
+            { widthLabel: '底长6厘米', depthLabel: '底宽4厘米', heightLabel: '底高3厘米' },
+            { widthLabel: '上长3厘米', depthLabel: '上宽2厘米', heightLabel: '上高2厘米' },
+        );
+        const question = '下图是一个长方体。底层长、宽和高分别是6厘米、4厘米、3厘米；上层长、宽和高分别是3厘米、2厘米、2厘米。';
+        const swapped = '下图是一个长方体。底层长、宽和高分别是3厘米、2厘米、2厘米；上层长、宽和高分别是6厘米、4厘米、3厘米。';
+        expect(parseFigureSpec(raw(spec), question)).not.toBeNull();
+        expect(parseFigureSpec(raw(spec), swapped)).toBeNull();
+    });
+
+    it('上下叠放图没有可靠尺寸标注时保持兼容，不凭题干数字猜测层级', () => {
+        const spec = stackedCuboid({}, {});
+        expect(parseFigureSpec(raw(spec), '下图是两个长方体上下叠放，长宽高分别为6、4、3。')).not.toBeNull();
+    });
+
     it('没有标点的连续长宽声明仍逐项核对，不漏掉后续错误尺寸', () => {
         const spec = rectangle('6cm', '4cm');
         for (const valid of ['下图是一个长方形，长6厘米宽4厘米。', '下图是一个长方形，长6cm宽4cm。']) {

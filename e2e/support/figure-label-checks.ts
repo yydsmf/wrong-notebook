@@ -13,7 +13,8 @@ export async function inspectFigureLabels({ markup, labels }: { markup: string; 
         const managedLabels = labels
             ? texts.filter((element) => labels.includes(element.textContent ?? ''))
             : texts.filter((element) => ['point', 'segment', 'angle', 'sector', 'arc', 'fixed', 'circle'].includes(element.getAttribute('data-figure-label') ?? ''));
-        const shapes = Array.from(svg.querySelectorAll<SVGGeometryElement>('line, path, circle, polygon, polyline')).filter((element) => {
+        const allShapes = Array.from(svg.querySelectorAll<SVGGeometryElement>('line, path, circle, polygon, polyline, rect, ellipse'));
+        const shapes = allShapes.filter((element) => {
             const stroke = element.getAttribute('stroke');
             // 浅灰坐标网格是背景；坐标轴、题目线条和各色点标记都参与检查。
             const fill = element.getAttribute('fill');
@@ -25,6 +26,14 @@ export async function inspectFigureLabels({ markup, labels }: { markup: string; 
             return Number(element.getAttribute('r')) <= 7 && fill && fill !== 'none' && fill !== '#fff';
         });
         const segments = Array.from(svg.querySelectorAll('line')).filter((element) => element.getAttribute('stroke') !== '#e5e7eb');
+        const hiddenByLaterFill = (point: DOMPoint, shape: SVGGeometryElement) => allShapes.slice(allShapes.indexOf(shape) + 1).some((later) => {
+            const style = getComputedStyle(later);
+            const alpha = /^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)$/u.exec(style.fill)?.[1];
+            // 无描边的实心面也会遮住先画的棱线，半透明填充仍需检查底下的线。
+            if (style.fill === 'none' || Number(style.fillOpacity) !== 1 || Number(style.opacity) !== 1
+                || (alpha !== undefined && Number(alpha) !== 1)) return false;
+            return later.isPointInFill(point);
+        });
         for (const label of managedLabels) {
             const box = label.getBBox();
             if (label.getAttribute('data-figure-label') === 'fixed') {
@@ -140,6 +149,7 @@ export async function inspectFigureLabels({ markup, labels }: { markup: string; 
                 const count = Math.max(1, Math.ceil(length));
                 for (let index = 0; index <= count; index += 1) {
                     const point = shape.getPointAtLength(length * index / count);
+                    if (hiddenByLaterFill(new DOMPoint(point.x, point.y), shape)) continue;
                     if (point.x > box.x - 2 && point.x < box.x + box.width + 2
                         && point.y > box.y - 2 && point.y < box.y + box.height + 2) {
                         issues.push(`标注“${label.textContent}”贴住 ${shape.tagName} 图元`);

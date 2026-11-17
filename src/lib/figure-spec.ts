@@ -2162,6 +2162,78 @@ function projectSolidBox(
     };
 }
 
+function pointOnSolidPolygonEdge(point: SolidGeometryPoint, from: SolidGeometryPoint, to: SolidGeometryPoint): boolean {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const cross = (point.x - from.x) * dy - (point.y - from.y) * dx;
+    if (Math.abs(cross) > 1e-7) return false;
+    const dot = (point.x - from.x) * dx + (point.y - from.y) * dy;
+    return dot >= -1e-7 && dot <= dx * dx + dy * dy + 1e-7;
+}
+
+function solidPolygonContainsPoint(polygon: SolidGeometryPoint[], point: SolidGeometryPoint): boolean {
+    let inside = false;
+    for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+        const from = polygon[previous]!;
+        const to = polygon[index]!;
+        if (pointOnSolidPolygonEdge(point, from, to)) return true;
+        if ((from.y > point.y) !== (to.y > point.y)
+            && point.x < (to.x - from.x) * (point.y - from.y) / (to.y - from.y) + from.x) inside = !inside;
+    }
+    return inside;
+}
+
+/** Return only line sections not covered by the later-painted solid polygons. */
+function getUncoveredSolidSegmentParts(
+    from: SolidGeometryPoint,
+    to: SolidGeometryPoint,
+    occluders: SolidGeometryPoint[][],
+): Array<[SolidGeometryPoint, SolidGeometryPoint]> {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared < 1e-8) return [];
+    const parameters = [0, 1];
+    const cross = (first: SolidGeometryPoint, second: SolidGeometryPoint) => first.x * second.y - first.y * second.x;
+
+    for (const polygon of occluders) {
+        for (let index = 0; index < polygon.length; index += 1) {
+            const edgeFrom = polygon[index]!;
+            const edgeTo = polygon[(index + 1) % polygon.length]!;
+            const edgeX = edgeTo.x - edgeFrom.x;
+            const edgeY = edgeTo.y - edgeFrom.y;
+            const offset = { x: edgeFrom.x - from.x, y: edgeFrom.y - from.y };
+            const denominator = cross({ x: dx, y: dy }, { x: edgeX, y: edgeY });
+            if (Math.abs(denominator) > 1e-9) {
+                const segmentT = cross(offset, { x: edgeX, y: edgeY }) / denominator;
+                const edgeT = cross(offset, { x: dx, y: dy }) / denominator;
+                if (segmentT >= -1e-8 && segmentT <= 1 + 1e-8 && edgeT >= -1e-8 && edgeT <= 1 + 1e-8) {
+                    parameters.push(Math.max(0, Math.min(1, segmentT)));
+                }
+            } else if (Math.abs(cross(offset, { x: dx, y: dy })) <= 1e-7) {
+                for (const point of [edgeFrom, edgeTo]) {
+                    const segmentT = ((point.x - from.x) * dx + (point.y - from.y) * dy) / lengthSquared;
+                    if (segmentT >= -1e-8 && segmentT <= 1 + 1e-8) parameters.push(Math.max(0, Math.min(1, segmentT)));
+                }
+            }
+        }
+    }
+
+    const sorted = parameters.sort((first, second) => first - second)
+        .filter((value, index, values) => index === 0 || value - values[index - 1]! > 1e-8);
+    const pointAt = (parameter: number): SolidGeometryPoint => ({ x: from.x + dx * parameter, y: from.y + dy * parameter });
+    const visible: Array<[SolidGeometryPoint, SolidGeometryPoint]> = [];
+    for (let index = 0; index < sorted.length - 1; index += 1) {
+        const start = sorted[index]!;
+        const end = sorted[index + 1]!;
+        if (end - start < 1e-8) continue;
+        const midpoint = pointAt((start + end) / 2);
+        if (occluders.some((polygon) => solidPolygonContainsPoint(polygon, midpoint))) continue;
+        visible.push([pointAt(start), pointAt(end)]);
+    }
+    return visible;
+}
+
 function renderStackedSolid(spec: z.infer<typeof stackedSolidSchema>): FigureDrawing | null {
     const totalHeight = spec.base.height + spec.top.height;
     const maximumPlanDimension = Math.max(spec.base.width, spec.base.depth, spec.top.width, spec.top.depth);
@@ -2171,6 +2243,7 @@ function renderStackedSolid(spec: z.infer<typeof stackedSolidSchema>): FigureDra
     const baseWidth = spec.base.width * scale;
     const baseDepthX = spec.base.depth * scale * 0.56;
     const baseDepthY = spec.base.depth * scale * 0.32;
+    const topDepthY = spec.top.depth * scale * 0.32;
     const baseOrigin: SolidGeometryPoint = {
         x: 400 - (baseWidth + baseDepthX) / 2,
         y: 395 + baseDepthY / 2,
@@ -2180,11 +2253,16 @@ function renderStackedSolid(spec: z.infer<typeof stackedSolidSchema>): FigureDra
     const topDepthX = spec.top.depth * scale * 0.56;
     const topOrigin: SolidGeometryPoint = {
         x: 400 - (topWidth + topDepthX) / 2,
-        y: base.frontTopLeft.y,
+        y: base.frontTopLeft.y - (baseDepthY - topDepthY) / 2,
     };
     const top = projectSolidBox(spec.top.width, spec.top.depth, spec.top.height, scale, topOrigin);
     const allPoints = Object.values(base).concat(Object.values(top));
     if (allPoints.some((point) => point.x < 30 || point.x > 770 || point.y < 30 || point.y > 470)) return null;
+    const topOccludingFaces = [
+        [top.frontTopLeft, top.frontTopRight, top.frontBottomRight, top.frontBottomLeft],
+        [top.frontTopRight, top.backTopRight, top.backBottomRight, top.frontBottomRight],
+        [top.frontTopLeft, top.backTopLeft, top.backTopRight, top.frontTopRight],
+    ];
 
     const pointList = (points: SolidGeometryPoint[]) => points.map((point) => `${finite(point.x)},${finite(point.y)}`).join(' ');
     const labels = createGeometryLabelLayout(12);
@@ -2205,10 +2283,27 @@ function renderStackedSolid(spec: z.infer<typeof stackedSolidSchema>): FigureDra
             [box.backTopRight, box.frontTopRight], [box.backTopRight, box.backBottomRight],
             [box.backBottomRight, box.frontBottomRight],
         ];
-        for (const [from, to] of visibleEdges) boxContent.push(labels.line(from.x, from.y, to.x, to.y));
-        boxContent.push(labels.line(box.backBottomLeft.x, box.backBottomLeft.y, box.backBottomRight.x, box.backBottomRight.y, { dashed: true, width: 1.8 }));
-        boxContent.push(labels.line(box.frontBottomLeft.x, box.frontBottomLeft.y, box.backBottomLeft.x, box.backBottomLeft.y, { dashed: true, width: 1.8 }));
-        boxContent.push(labels.line(box.backBottomLeft.x, box.backBottomLeft.y, box.backTopLeft.x, box.backTopLeft.y, { dashed: true, width: 1.8 }));
+        for (const [from, to] of visibleEdges) {
+            boxContent.push(part === 'base' ? line(from.x, from.y, to.x, to.y) : labels.line(from.x, from.y, to.x, to.y));
+            if (part === 'base') {
+                for (const [visibleFrom, visibleTo] of getUncoveredSolidSegmentParts(from, to, topOccludingFaces)) {
+                    labels.segment(visibleFrom, visibleTo);
+                }
+            }
+        }
+        if (part === 'base') {
+            const hiddenEdges: Array<[SolidGeometryPoint, SolidGeometryPoint]> = [
+                [box.backBottomLeft, box.backBottomRight],
+                [box.frontBottomLeft, box.backBottomLeft],
+                [box.backBottomLeft, box.backTopLeft],
+            ];
+            for (const [from, to] of hiddenEdges) {
+                boxContent.push(line(from.x, from.y, to.x, to.y, { dashed: true, width: 1.8 }));
+                for (const [visibleFrom, visibleTo] of getUncoveredSolidSegmentParts(from, to, topOccludingFaces)) {
+                    labels.segment(visibleFrom, visibleTo);
+                }
+            }
+        }
         content.push(`<g data-stacked-solid-part="${part}">${boxContent.join('')}</g>`);
     };
 
@@ -2222,26 +2317,27 @@ function renderStackedSolid(spec: z.infer<typeof stackedSolidSchema>): FigureDra
     ) => {
         if (part.widthLabel) {
             if (topPart) {
+                // 顶物体的正面底边位于底物体上表面内部，标签放在正面中央并参与碰撞检查。
                 const x = (box.frontTopLeft.x + box.frontTopRight.x) / 2;
-                // 顶物体的正面空间比外侧更稳定，避免文字撞到底物体的顶面棱线。
-                content.push(labels.text(x, box.frontBottomLeft.y + 28, part.widthLabel, { size: 18, maxWidth: 150 }));
+                const y = box.frontTopLeft.y + (box.frontBottomLeft.y - box.frontTopLeft.y) * 0.62;
+                content.push(labels.text(x, y, part.widthLabel, { size: 12, maxWidth: 150 }));
             } else {
-                labels.segmentLabel(box.frontBottomLeft, box.frontBottomRight, part.widthLabel, { size: 18, maxWidth: 150 }, { x: 0, y: 1 });
+                labels.segmentLabel(box.frontBottomLeft, box.frontBottomRight, part.widthLabel, { size: 15, maxWidth: 150 }, { x: 0, y: 1 });
             }
         }
         if (part.heightLabel) {
             if (topPart) {
                 const x = Math.max(box.backBottomRight.x, base.backBottomRight.x) + 14;
-                content.push(labels.text(x, (box.frontTopLeft.y + box.frontBottomLeft.y) / 2 + 6, part.heightLabel, { size: 18, maxWidth: 110, anchor: 'start' }));
+                content.push(labels.text(x, (box.frontTopLeft.y + box.frontBottomLeft.y) / 2 + 6, part.heightLabel, { size: 15, maxWidth: 110, anchor: 'start' }));
             } else {
-                labels.segmentLabel(box.frontTopLeft, box.frontBottomLeft, part.heightLabel, { size: 18, maxWidth: 110 }, { x: -1, y: 0 });
+                labels.segmentLabel(box.frontTopLeft, box.frontBottomLeft, part.heightLabel, { size: 15, maxWidth: 110 }, { x: -1, y: 0 });
             }
         }
         if (part.depthLabel) {
             if (topPart) {
-                content.push(labels.text(box.backTopRight.x + 22, box.backTopRight.y - 8, part.depthLabel, { size: 18, maxWidth: 130, anchor: 'start' }));
+                content.push(labels.text(box.backTopRight.x + 22, box.backTopRight.y - 8, part.depthLabel, { size: 15, maxWidth: 130, anchor: 'start' }));
             } else {
-                labels.segmentLabel(box.frontBottomRight, box.backBottomRight, part.depthLabel, { size: 18, maxWidth: 130 }, { x: 1, y: 1 });
+                labels.segmentLabel(box.frontBottomRight, box.backBottomRight, part.depthLabel, { size: 15, maxWidth: 130 }, { x: 1, y: 1 });
             }
         }
     };

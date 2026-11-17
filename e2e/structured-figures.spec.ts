@@ -20,6 +20,34 @@ test('标注检查器能检出固定说明和圆名的错误归属', async ({ pa
         const issues = await page.evaluate(inspectFigureLabels, { markup: wrap(content) });
         expect(issues.some((issue) => issue.includes(message)), `${message} 应被实际字形检查检出`).toBe(true);
     }
+    const coveredLine = '<line x1="300" y1="120" x2="500" y2="120" stroke="#111"/>';
+    const cover = '<polygon points="350,100 450,100 450,140 350,140" fill="#fff" stroke="none"/>';
+    expect(await page.evaluate(inspectFigureLabels, { markup: wrap(coveredLine + cover + fixed) })).toEqual([]);
+    for (const content of [cover + coveredLine, coveredLine + cover.replace('fill="#fff"', 'fill="#fff" fill-opacity="0.5"'),
+        coveredLine + cover.replace('fill="#fff"', 'fill="rgba(255,255,255,0.5)"')]) {
+        const issues = await page.evaluate(inspectFigureLabels, { markup: wrap(content + fixed) });
+        expect(issues.some((issue) => issue.includes('贴住 line')), '未遮住或半透明覆盖的棱线仍应检查').toBe(true);
+    }
+});
+
+test('叠放长方体尺寸标注通过浏览器实际字形与棱线检查', async ({ page }) => {
+    const samples = [
+        [{ width: 10, depth: 8, height: 5 }, { width: 7, depth: 5, height: 2 }],
+        [{ width: 9, depth: 5, height: 3 }, { width: 8, depth: 4, height: 1.5 }],
+        [{ width: 8, depth: 6, height: 8 }, { width: 3, depth: 2, height: 4 }],
+        [{ width: 12, depth: 9, height: 3 }, { width: 4, depth: 3, height: 5 }],
+    ] as const;
+
+    for (const [base, top] of samples) {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'stacked_solid',
+            base: { ...base, widthLabel: '底长8', depthLabel: '底宽6', heightLabel: '底高4' },
+            top: { ...top, widthLabel: '上长4', depthLabel: '上宽3', heightLabel: '上高3' },
+        }));
+        expect(svg).not.toBeNull();
+        const issues = await page.evaluate(inspectFigureLabels, { markup: svg! });
+        expect(issues, `尺寸比例 ${JSON.stringify({ base, top })} 的标注应避开可见棱线`).toEqual([]);
+    }
 });
 
 for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {

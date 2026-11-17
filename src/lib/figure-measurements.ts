@@ -54,7 +54,7 @@ function parseNumericLabel(value: string): NumericLabel {
 function parseLengthLabel(value: string | undefined): LengthLabel {
     if (!value || value.length > 80) return { kind: 'unknown' };
     // 只接受完整数值和有限的长度前缀，不从公式、面积或说明中抽取数字。
-    const text = value.trim().replace(/^(?:(?:边长|棱长|弦长|长度|半径|直径|高度|母线长|母线|上底|下底|长|宽|高|底)(?:为|是)?\s*[:：=＝]?\s*|(?:slant\s+height|radius|diameter|height)\b\s*(?:(?:is|of)\b\s*)?[:：=＝]?\s*|[rdhl]\s*=\s*)/i, '');
+    const text = value.trim().replace(/^(?:(?:(?:底|上|下)(?:面)?(?:长|宽|高|底)?|边长|棱长|弦长|长度|半径|直径|高度|长|宽|高|底|母线长|母线)(?:为|是)?\s*[:：=＝]?\s*|(?:slant\s+height|radius|diameter|height)\b\s*(?:(?:is|of)\b\s*)?[:：=＝]?\s*|[rdhl]\s*=\s*)/i, '');
     const match = text.match(/^(.*?)\s*(毫米|厘米|分米|千米|公里|米|mm|cm|dm|km|m)?$/i);
     if (!match) return { kind: 'unknown' };
     const number = parseNumericLabel(match[1]);
