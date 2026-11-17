@@ -13,6 +13,13 @@ const area = (shape: 'triangle' | 'rectangle' | 'square' | 'parallelogram' | 'tr
 const solid = (shape: 'cube' | 'cuboid') => ({
     type: 'solid_geometry', shape, width: 4, depth: 4, height: 4,
 });
+const cubeNet = {
+    type: 'solid_net', shape: 'cube',
+    cells: [
+        { row: 0, col: 0 }, { row: -1, col: 0 }, { row: 1, col: 0 },
+        { row: 0, col: -1 }, { row: 0, col: 1 }, { row: -2, col: 0 },
+    ],
+};
 const labelledGeometry = (labels: string[], segmentLabels: Array<[string, string]> = []) => ({
     type: 'basic_geometry',
     points: labels.map((label, index) => ({ id: `${label}-${index}`, x: 20 + index * 20, y: index % 2 ? 20 : 80, label })),
@@ -550,6 +557,17 @@ describe('题干与结构化配图的一致性', () => {
         expect(parseFigure('true', null, raw(area('parallelogram')), '下图是一个长方形。').figureSvg).not.toBeNull();
         expect(parseFigure('true', null, raw(solid('cuboid')), '下图是一个正方体。').figureSvg).not.toBeNull();
         expect(parseFigure('true', null, raw(solid('cube')), '下图是一个长方体。').figureSvg).not.toBeNull();
+    });
+
+    it('明确长方体展开图时拒绝正方体展开图，待判断展开图保持保守', () => {
+        expect(parseFigure('true', null, raw(cubeNet), '下图是正方体的展开图。').figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(cubeNet), '下图是长方体的展开图。'))
+            .toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(cubeNet), '下图是一个 cuboid net。'))
+            .toEqual({ hasFigure: true, figureSvg: null });
+        expect(parseFigure('true', null, raw(cubeNet), '哪些展开图能折成正方体？').figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(cubeNet), '下图是正方体还是长方体的展开图？').figureSvg).not.toBeNull();
+        expect(parseFigure('true', null, raw(cubeNet), '题干引用“长方体的展开图”这句话。').figureSvg).not.toBeNull();
     });
 
     it('兼容模板仍需满足明确主图的长度标注，不改写单位或补充未知值', () => {

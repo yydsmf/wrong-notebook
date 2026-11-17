@@ -67,6 +67,9 @@ const ASSERTION_REVIEW_COMMAND = /^\s*(?:(?:请|试)?(?:判断|辨别|检验|证
 const ASSERTION_POSTCONDITION = /^\s*(?:如果|若|假设|假如|倘若|只要|只有|除非|\b(?:if|when|unless|provided|assum(?:e|ing)|suppos(?:e|ing))\b)/iu;
 const PARTIAL_FIGURE_QUESTION = /阴影|涂色|部分|拼|切|裁|折|展开|截面|剖面|投影|表面|侧面|底面|内部|外部|选项|\b(?:inside|outside|shaded|parts?|sections?|projections?|nets?|faces?|cuts?|folds?|options?)\b/iu;
 const GROUP_CANDIDATE_CONTEXT = /选择|下列|下述|以下|候选|正误|对错|正确|错误|对的|错的|\b(?:which|choose|select|statements?|true|false|correct|incorrect)\b/iu;
+const NET_CANDIDATE_CONTEXT = /哪些|哪种|哪一个|能(?:折|拼|组成)|不能|不可|无法|是否能|\b(?:which\s+nets?|can\s+(?:fold|form|make)|cannot|can't|unable)\b/iu;
+const CUBE_NET_ASSERTION = /(?:正方体|立方体)\s*(?:的)?\s*展开图|展开图[^。！？?？;；]{0,12}(?:正方体|立方体)|\b(?:cube)\s+net\b|\bnet\s+of\s+(?:a\s+)?cube\b/iu;
+const CUBOID_NET_ASSERTION = /长方体\s*(?:的)?\s*展开图|展开图[^。！？?？;；]{0,12}长方体|\b(?:cuboid|rectangular\s+prism)\s+net\b|\bnet\s+of\s+(?:a\s+)?(?:cuboid|rectangular\s+prism)\b/iu;
 
 function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -174,6 +177,22 @@ function uniqueQuestionShape(questionText: string): QuestionShapeAssertion | nul
         }
     }
     return null;
+}
+
+/**
+ * 展开图属于局部图，不能复用普通主图形状提取；但明确写出的正方体／长方体展开图仍需防止模板错配。
+ * 选择、判断、能否折成等语境保持保守，不把待判断命题当成事实。
+ */
+function explicitNetShape(questionText: string): 'cube' | 'cuboid' | null {
+    if (GROUP_CANDIDATE_CONTEXT.test(questionText)
+        || NET_CANDIDATE_CONTEXT.test(questionText)
+        || UNCERTAIN_ASSERTION_CONTEXT.test(questionText)
+        || AMBIGUOUS_SHAPE_CONTEXT.test(questionText)
+        || /["“”‘’「」『』`]/u.test(questionText)) return null;
+    const cube = CUBE_NET_ASSERTION.test(questionText);
+    const cuboid = CUBOID_NET_ASSERTION.test(questionText);
+    if (cube === cuboid) return null;
+    return cube ? 'cube' : cuboid ? 'cuboid' : null;
 }
 
 function matchesAreaShape(spec: Extract<FigureSpec, { type: 'area_geometry' }>, expected: QuestionShapeAssertion): boolean {
@@ -293,6 +312,10 @@ function validateSingleFigureQuestionConsistency(
     questionText: string,
     strictMissingPoints = false,
 ): boolean {
+    if (spec.type === 'solid_net') {
+        // solid_net 目前只表达正方体展开图；明确的长方体展开图必须回退，待判断语境保持保守。
+        return explicitNetShape(questionText) !== 'cuboid';
+    }
     if (spec.type === 'fraction' && !validateFigureQuestionFraction(spec, questionText)) return false;
     if (spec.type === 'number_line' && !validateFigureQuestionNumberLine(spec, questionText, strictMissingPoints)) return false;
     if (spec.type === 'coordinate_plane' && !validateFigureQuestionCoordinates(spec, questionText, strictMissingPoints)) return false;
