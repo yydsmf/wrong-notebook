@@ -68,6 +68,7 @@ describe('AI Prompts', () => {
             expect(prompt).toContain('through');
             expect(prompt).toContain('figure_group');
             expect(prompt).toContain('pie_chart');
+            expect(prompt).toContain('pictogram');
             expect(prompt).toContain('figures 必须按原题顺序完整列出');
             expect(prompt).toContain('compareSizes:true');
             expect(prompt).toContain('compareSizes 是可选布尔值，默认 false');
@@ -89,6 +90,19 @@ describe('AI Prompts', () => {
                 expect(prompt).toContain('不能为了凑成 100 或好看而改写');
                 expect(prompt).toContain('零值类别仍保留');
                 expect(prompt).toContain('类别、数值、单位或对应关系不清楚时留空 figure_spec');
+            }
+        });
+
+        it.each(['zh', 'en'] as const)('重绘和相似题共用象形统计图的整图标约束（%s）', (language) => {
+            for (const prompt of [
+                generateFigurePrompt('象形统计图表示水果数量，每个图标表示2个。'),
+                generateSimilarQuestionPrompt(language, '象形统计图表示水果数量，每个图标表示2个。', ['统计图'], 'medium'),
+            ]) {
+                expect(prompt).toContain('pictogram');
+                expect(prompt).toContain('values/perIcon');
+                expect(prompt).toContain('不支持半个图标');
+                expect(prompt).toContain('不能把图标个数、每个图标代表的数量或单位混淆');
+                expect(prompt).toContain('类别、数值、每图标含义、单位或图标形状无法确认时留空 figure_spec');
             }
         });
 

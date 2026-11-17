@@ -284,6 +284,14 @@ export const STRUCTURED_FIGURE_FIXTURES: FigureSpecFixture[] = [
         elementMinimums: { circle: 1, path: 3, rect: 4, text: 4 },
     },
     {
+        id: 'primary-pictogram-fruit',
+        stage: '小学',
+        type: 'pictogram',
+        spec: { type: 'pictogram', categories: ['苹果', '梨', '桃'], values: [8, 4, 10], perIcon: 2, icon: 'apple', unit: '个', title: '水果数量' },
+        mustContain: ['data-figure-pictogram-icon="apple"', '图例：每个图标表示2个', '苹果', '8 个', '梨', '4 个', '桃', '10 个', '水果数量'],
+        elementMinimums: { g: 12, path: 18, text: 8 },
+    },
+    {
         id: 'primary-bar-chart-long-categories',
         stage: '小学',
         type: 'bar_chart',

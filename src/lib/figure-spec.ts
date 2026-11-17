@@ -347,6 +347,17 @@ const pieChartSchema = z.object({
 }).refine((value) => value.categories.length === value.values.length, 'pie_chart categories and values must match')
     .refine((value) => value.values.some((number) => number > 0), 'pie_chart values must contain a positive value');
 
+const pictogramSchema = z.object({
+    type: z.literal('pictogram'),
+    categories: z.array(z.string().min(1).max(24)).min(1).max(8),
+    values: z.array(z.number().finite().min(0)).min(1).max(8),
+    perIcon: z.number().finite().positive().max(1000),
+    icon: z.enum(['person', 'book', 'apple', 'star', 'flower', 'car', 'ball', 'tree', 'house', 'circle', 'square']),
+    unit: z.string().max(20).optional(),
+    title: z.string().max(100).optional(),
+}).refine((value) => value.categories.length === value.values.length, 'pictogram categories and values must match')
+    .refine((value) => value.values.some((number) => number > 0), 'pictogram values must contain a positive value');
+
 const gridShapeSchema = z.object({
     type: z.literal('grid_shape'),
     rows: z.number().int().min(1).max(30),
@@ -377,6 +388,7 @@ const singleFigureSchemas = [
     barChartSchema,
     lineChartSchema,
     pieChartSchema,
+    pictogramSchema,
     gridShapeSchema,
     tableSchema,
 ] as const;
@@ -718,6 +730,13 @@ function normalizeSingleFigureSpec(spec: SingleFigureSpec): SingleFigureSpec {
         case 'bar_chart':
         case 'line_chart':
         case 'pie_chart':
+            return {
+                ...spec,
+                categories: spec.categories.map(normalizeText),
+                ...(spec.unit ? { unit: normalizeText(spec.unit) } : {}),
+                ...(spec.title ? { title: normalizeText(spec.title) } : {}),
+            };
+        case 'pictogram':
             return {
                 ...spec,
                 categories: spec.categories.map(normalizeText),
@@ -1287,6 +1306,13 @@ function validateFigureSpec(spec: FigureSpec): boolean {
                 && spec.values.every((value) => value >= 0)
                 && (!spec.unit || validDisplayText(spec.unit, 16))
                 && (!spec.title || validDisplayText(spec.title, 60));
+        case 'pictogram': {
+            const iconCounts = spec.values.map((value) => value / spec.perIcon);
+            return iconCounts.every((count) => Number.isInteger(count) && count >= 0 && count <= 16)
+                && spec.categories.every((category) => validDisplayText(category, 24))
+                && (!spec.unit || validDisplayText(spec.unit, 16))
+                && (!spec.title || validDisplayText(spec.title, 60));
+        }
         case 'grid_shape': {
             const cells = new Set<string>();
             for (const cell of spec.filledCells) {
@@ -2671,6 +2697,137 @@ function renderPieChart(spec: z.infer<typeof pieChartSchema>): FigureDrawing | n
     return root(content.join(''));
 }
 
+type PictogramIcon = z.infer<typeof pictogramSchema>['icon'];
+
+function renderPictogramIcon(icon: PictogramIcon, centerX: number, centerY: number, size = 24): string {
+    const half = size / 2;
+    const fill = COLORS.lightBlue;
+    const stroke = COLORS.black;
+    const strokeWidth = 1.6;
+    const circle = (x: number, y: number, radius: number, color = fill) =>
+        `<circle cx="${finite(x)}" cy="${finite(y)}" r="${finite(radius)}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    const rect = (x: number, y: number, width: number, height: number, color = fill) =>
+        `<rect x="${finite(x)}" y="${finite(y)}" width="${finite(width)}" height="${finite(height)}" rx="2" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    const polygon = (points: Array<{ x: number; y: number }>, color = fill) =>
+        `<polygon points="${points.map((point) => `${finite(point.x)},${finite(point.y)}`).join(' ')}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    const groupStart = `<g data-figure-pictogram-icon="${escapeXml(icon)}">`;
+    switch (icon) {
+        case 'person':
+            return groupStart
+                + circle(centerX, centerY - half * 0.28, half * 0.22)
+                + `<path d="M ${finite(centerX - half * 0.38)} ${finite(centerY + half * 0.48)} Q ${finite(centerX - half * 0.34)} ${finite(centerY - half * 0.02)} ${finite(centerX)} ${finite(centerY - half * 0.02)} Q ${finite(centerX + half * 0.34)} ${finite(centerY - half * 0.02)} ${finite(centerX + half * 0.38)} ${finite(centerY + half * 0.48)} Z" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
+                + '</g>';
+        case 'book':
+            return groupStart
+                + rect(centerX - half * 0.78, centerY - half * 0.62, half * 0.7, size * 0.76)
+                + rect(centerX + half * 0.08, centerY - half * 0.62, half * 0.7, size * 0.76)
+                + `<line x1="${finite(centerX)}" y1="${finite(centerY - half * 0.56)}" x2="${finite(centerX)}" y2="${finite(centerY + half * 0.56)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
+                + '</g>';
+        case 'apple':
+            return groupStart
+                + `<path d="M ${finite(centerX)} ${finite(centerY - half * 0.05)} C ${finite(centerX - half * 0.78)} ${finite(centerY - half * 0.72)} ${finite(centerX - half * 0.92)} ${finite(centerY + half * 0.64)} ${finite(centerX)} ${finite(centerY + half * 0.72)} C ${finite(centerX + half * 0.92)} ${finite(centerY + half * 0.64)} ${finite(centerX + half * 0.78)} ${finite(centerY - half * 0.72)} ${finite(centerX)} ${finite(centerY - half * 0.05)} Z" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
+                + `<path d="M ${finite(centerX)} ${finite(centerY - half * 0.56)} Q ${finite(centerX + half * 0.1)} ${finite(centerY - half * 0.96)} ${finite(centerX + half * 0.5)} ${finite(centerY - half * 0.82)} Q ${finite(centerX + half * 0.2)} ${finite(centerY - half * 0.42)} ${finite(centerX)} ${finite(centerY - half * 0.56)} Z" fill="${COLORS.green}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
+                + '</g>';
+        case 'star': {
+            const points = Array.from({ length: 10 }, (_, index) => {
+                const angle = -Math.PI / 2 + index * Math.PI / 5;
+                const radius = index % 2 === 0 ? half * 0.9 : half * 0.4;
+                return { x: centerX + Math.cos(angle) * radius, y: centerY + Math.sin(angle) * radius };
+            });
+            return groupStart + polygon(points) + '</g>';
+        }
+        case 'flower':
+            return groupStart
+                + [0, 72, 144, 216, 288].map((degrees) => {
+                    const angle = degrees * Math.PI / 180;
+                    return circle(centerX + Math.cos(angle) * half * 0.38, centerY + Math.sin(angle) * half * 0.38, half * 0.3);
+                }).join('')
+                + circle(centerX, centerY, half * 0.25, '#fff')
+                + '</g>';
+        case 'car':
+            return groupStart
+                + rect(centerX - half * 0.82, centerY - half * 0.18, size * 0.82, half * 0.48)
+                + polygon([
+                    { x: centerX - half * 0.52, y: centerY - half * 0.18 },
+                    { x: centerX - half * 0.25, y: centerY - half * 0.58 },
+                    { x: centerX + half * 0.32, y: centerY - half * 0.58 },
+                    { x: centerX + half * 0.62, y: centerY - half * 0.18 },
+                ])
+                + circle(centerX - half * 0.5, centerY + half * 0.36, half * 0.17, '#fff')
+                + circle(centerX + half * 0.5, centerY + half * 0.36, half * 0.17, '#fff')
+                + '</g>';
+        case 'ball':
+            return groupStart
+                + circle(centerX, centerY, half * 0.82)
+                + `<path d="M ${finite(centerX - half * 0.68)} ${finite(centerY - half * 0.45)} Q ${finite(centerX)} ${finite(centerY)} ${finite(centerX + half * 0.68)} ${finite(centerY + half * 0.45)} M ${finite(centerX + half * 0.68)} ${finite(centerY - half * 0.45)} Q ${finite(centerX)} ${finite(centerY)} ${finite(centerX - half * 0.68)} ${finite(centerY + half * 0.45)}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
+                + '</g>';
+        case 'tree':
+            return groupStart
+                + rect(centerX - half * 0.15, centerY + half * 0.08, half * 0.3, half * 0.72, '#d1a46c')
+                + polygon([
+                    { x: centerX, y: centerY - half * 0.88 },
+                    { x: centerX - half * 0.82, y: centerY + half * 0.35 },
+                    { x: centerX + half * 0.82, y: centerY + half * 0.35 },
+                ], COLORS.green)
+                + '</g>';
+        case 'house':
+            return groupStart
+                + rect(centerX - half * 0.66, centerY - half * 0.12, size * 0.66, half * 0.76)
+                + polygon([
+                    { x: centerX - half * 0.84, y: centerY - half * 0.12 },
+                    { x: centerX, y: centerY - half * 0.88 },
+                    { x: centerX + half * 0.84, y: centerY - half * 0.12 },
+                ])
+                + rect(centerX - half * 0.14, centerY + half * 0.16, half * 0.28, half * 0.48, '#fff')
+                + '</g>';
+        case 'circle':
+            return groupStart + circle(centerX, centerY, half * 0.78) + '</g>';
+        case 'square':
+            return groupStart + rect(centerX - half * 0.72, centerY - half * 0.72, size * 0.72, size * 0.72) + '</g>';
+    }
+}
+
+function renderPictogram(spec: z.infer<typeof pictogramSchema>): FigureDrawing | null {
+    const iconCounts = spec.values.map((value) => value / spec.perIcon);
+    const maxIcons = Math.max(...iconCounts);
+    if (!Number.isInteger(maxIcons) || maxIcons < 1 || maxIcons > 16) return null;
+
+    const titleSize = spec.title ? fitFontSize(spec.title, 22, 700) : 22;
+    const legendText = `图例：每个图标表示${spec.perIcon}${spec.unit ?? ''}`;
+    const legendSize = fitFontSize(legendText, 16, 650);
+    if (titleSize < 12 || legendSize < 12) return null;
+
+    const rowGap = Math.max(44, Math.min(54, 360 / spec.categories.length));
+    const firstRowY = spec.title ? 132 : 104;
+    const lastRowY = firstRowY + (spec.categories.length - 1) * rowGap;
+    if (lastRowY + 32 > 490) return null;
+
+    const categoryWidth = 130;
+    const iconSize = 24;
+    const iconStep = 30;
+    const iconStartX = 190;
+    const valueX = 750;
+    const categoryBoxes = spec.categories.map((category, index) =>
+        chartWrappedTextBox(90, firstRowY + index * rowGap + 5, category, 16, categoryWidth));
+    const valueTexts = spec.values.map((value) => `${value}${spec.unit ? ` ${spec.unit}` : ''}`);
+    const valueBoxes = valueTexts.map((value, index) => chartTextBox(valueX, firstRowY + index * rowGap + 5, value, 16, 95, 'end'));
+    if (categoryBoxes.some((box) => box === null) || valueBoxes.some((box) => box === null)) return null;
+
+    const content: string[] = [];
+    if (spec.title) content.push(text(400, 35, spec.title, { size: titleSize, maxWidth: 700, title: true }));
+    content.push(renderPictogramIcon(spec.icon, 72, 72, 22));
+    content.push(text(100, 78, legendText, { size: legendSize, maxWidth: 650, anchor: 'start' }));
+    spec.categories.forEach((category, index) => {
+        const rowY = firstRowY + index * rowGap;
+        content.push(textWithLineWrap(90, rowY + 5, category, { size: 16, maxWidth: categoryWidth }));
+        for (let iconIndex = 0; iconIndex < iconCounts[index]!; iconIndex += 1) {
+            content.push(renderPictogramIcon(spec.icon, iconStartX + iconIndex * iconStep, rowY, iconSize));
+        }
+        content.push(text(valueX, rowY + 5, valueTexts[index]!, { size: 16, maxWidth: 95, anchor: 'end' }));
+    });
+    return root(content.join(''));
+}
+
 function chartAxisTickLayout(
     ticks: readonly FigureAxisTick[],
     axisX: number,
@@ -2865,6 +3022,7 @@ function renderParsedFigureSpec(spec: SingleFigureSpec): FigureDrawing | null {
         case 'bar_chart':
         case 'line_chart': return renderChart(spec);
         case 'pie_chart': return renderPieChart(spec);
+        case 'pictogram': return renderPictogram(spec);
         case 'grid_shape': return renderGrid(spec);
         case 'table': return renderTable(spec);
         default: return null;

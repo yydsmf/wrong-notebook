@@ -913,6 +913,39 @@ describe('structured figure specs', () => {
         }))).toBeNull();
     });
 
+    it('象形统计图按每个图标代表的数量绘制，并保留图例和原始数值', () => {
+        const raw = {
+            type: 'pictogram',
+            categories: ['苹果', '梨'],
+            values: [8, 4],
+            perIcon: 2,
+            icon: 'apple',
+            unit: '个',
+            title: '水果数量',
+        };
+        const svg = renderFigureSpec(JSON.stringify(raw));
+        expect(svg).not.toBeNull();
+        expect(svg).toBe(renderFigureSpec(JSON.stringify(raw)));
+        expect(svg).toContain('图例：每个图标表示2个');
+        expect(svg).toContain('8 个');
+        expect(svg).toContain('4 个');
+        expect(svg).toContain('data-figure-pictogram-icon="apple"');
+        expect(new DOMParser().parseFromString(svg!, 'image/svg+xml').querySelectorAll('g[data-figure-pictogram-icon="apple"]')).toHaveLength(7);
+        expect(svg).not.toMatch(/NaN|Infinity|undefined/);
+    });
+
+    it('象形统计图无法完整表示半个图标、超过16个图标或数据不一致时回退', () => {
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'pictogram', categories: ['甲'], values: [3], perIcon: 2, icon: 'person',
+        }))).toBeNull();
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'pictogram', categories: ['甲'], values: [34], perIcon: 2, icon: 'person',
+        }))).toBeNull();
+        expect(renderFigureSpec(JSON.stringify({
+            type: 'pictogram', categories: ['甲', '乙'], values: [2], perIcon: 1, icon: 'person',
+        }))).toBeNull();
+    });
+
     it('renders a coordinate plane with points and segments from structured data', () => {
         const svg = renderFigureSpec(JSON.stringify({
             type: 'coordinate_plane',
