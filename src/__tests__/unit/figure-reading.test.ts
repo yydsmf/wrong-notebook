@@ -23,6 +23,22 @@ describe('配图默认阅读尺寸', () => {
         });
     });
 
+    it('长图组在安全尺寸内截断放大，仍然提供可滚动阅读区域', () => {
+        const fixture = HEADING_FIGURE_FIXTURES.find((entry) => entry.id === 'heading-junior-title-coordinate')!;
+        const markup = renderFigureSpec(JSON.stringify({
+            type: 'figure_group',
+            figures: Array.from({ length: 4 }, (_, index) => ({ label: 'ABCD'[index], figure: fixture.spec })),
+        }))!;
+        const root = new DOMParser().parseFromString(markup, 'image/svg+xml').documentElement;
+        const width = Number(root.getAttribute('width'));
+        const height = Number(root.getAttribute('height'));
+        const reading = getFigureReadingSize(markup, width, height, width, 360);
+        expect(reading).not.toBeNull();
+        expect(reading!.width).toBeLessThanOrEqual(2400);
+        expect(reading!.height).toBeLessThanOrEqual(4800);
+        expect(reading!.width).toBeGreaterThan(width);
+    });
+
     it.each([[0, 0], [0, 500], [800, 0], [-1, 500], [NaN, 500], [800, Infinity]])(
         '隐藏或未完成布局的图片 %s×%s 仍按可靠的原始尺寸提供阅读宽度',
         (displayedWidth, displayedHeight) => {

@@ -7,6 +7,9 @@ interface FigureReadingSize {
 }
 
 const svgNumber = (value: string | null) => value && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value) ? Number(value) : NaN;
+const MAX_READING_SCALE = 4;
+const MAX_READING_WIDTH = 2400;
+const MAX_READING_HEIGHT = 4800;
 const viewBox = (element: Element) => {
     const values = (element.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(svgNumber);
     return values.length === 4 && values.every(Number.isFinite) && values[2] > 0 && values[3] > 0 ? values : null;
@@ -53,7 +56,13 @@ export function getFigureReadingSize(
     const renderedScale = [displayedWidth, displayedHeight].every((value) => Number.isFinite(value) && value > 0)
         ? Math.min(1, displayedWidth / width, displayedHeight / height)
         : 1;
-    const scale = Math.max(1, 12 / (minimumFontSize * renderedScale));
-    if (scale > 4 || width * scale > 2400 || height * scale > 4800) return null;
+    const requestedScale = Math.max(1, 12 / (minimumFontSize * renderedScale));
+    // Keep a scrollable reading surface when a constrained first layout would
+    // require more pixels than the safe rasterization budget. A source canvas
+    // that is already larger than the budget still falls back to its original
+    // display path because it cannot be reduced without losing content.
+    const maximumScale = Math.min(MAX_READING_SCALE, MAX_READING_WIDTH / width, MAX_READING_HEIGHT / height);
+    if (requestedScale > MAX_READING_SCALE || !Number.isFinite(maximumScale) || maximumScale < 1) return null;
+    const scale = Math.min(requestedScale, maximumScale);
     return { width: width * scale, height: height * scale, minimumFontSize: minimumFontSize * scale };
 }

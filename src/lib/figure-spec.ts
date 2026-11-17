@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { sanitizeFigureSvg } from './figure-svg';
 import { layoutFigureGroup } from './figure-group-layout';
 import { createFigureAxisTicks } from './figure-axis-ticks';
+import type { FigureAxisTick } from './figure-axis-ticks';
 import { getFigureChartDomain } from './figure-chart-scale';
 import { tokenizeFigureText } from './figure-text-tokens';
 import { getFigureGeometryViewport, layoutFigureGeometryLabels } from './figure-label-layout';
@@ -312,11 +313,14 @@ const basicGeometrySchema = z.object({
     }
 });
 
+const chartTickStep = z.number().finite().positive().max(100).optional();
+
 const barChartSchema = z.object({
     type: z.literal('bar_chart'),
     categories: z.array(z.string().min(1).max(30)).min(1).max(20),
     values: z.array(z.number().finite().min(0)).min(1).max(20),
     maxValue: z.number().finite().positive().optional(),
+    tickStep: chartTickStep,
     unit: z.string().max(20).optional(),
     title: z.string().max(100).optional(),
 }).refine((value) => value.categories.length === value.values.length, 'bar_chart categories and values must match');
@@ -327,6 +331,7 @@ const lineChartSchema = z.object({
     values: z.array(z.number().finite()).min(2).max(30),
     maxValue: z.number().finite().optional(),
     minValue: z.number().finite().optional(),
+    tickStep: chartTickStep,
     unit: z.string().max(20).optional(),
     title: z.string().max(100).optional(),
 }).refine((value) => value.categories.length === value.values.length, 'line_chart categories and values must match')
@@ -933,6 +938,13 @@ function validDisplayText(value: string, maxLength: number): boolean {
     return value.length > 0 && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
+function validateChartTickStep(spec: Extract<FigureSpec, { type: 'bar_chart' | 'line_chart' }>): boolean {
+    if (spec.tickStep === undefined) return true;
+    const domain = getFigureChartDomain(spec);
+    const ticks = domain ? createFigureAxisTicks(domain.min, domain.max, spec.tickStep) : null;
+    return ticks !== null && ticks.length >= 2;
+}
+
 /** 只检查可明确识别的可见拉丁点名；说明、隐藏ID和其它记法不推断为同名点。 */
 function hasUniqueVisiblePointNames(points: readonly { label?: string }[]): boolean {
     const names = new Set<string>();
@@ -1249,12 +1261,14 @@ function validateFigureSpec(spec: FigureSpec): boolean {
         case 'bar_chart':
             return spec.values.every((value) => value >= 0)
                 && (spec.maxValue === undefined || spec.maxValue >= Math.max(...spec.values))
+                && validateChartTickStep(spec)
                 && (!spec.unit || validDisplayText(spec.unit, 16))
                 && (!spec.title || validDisplayText(spec.title, 60));
         case 'line_chart':
             return (spec.maxValue === undefined || spec.maxValue >= Math.max(...spec.values))
                 && (spec.minValue === undefined || spec.minValue <= Math.min(...spec.values))
                 && getFigureChartDomain(spec) !== null
+                && validateChartTickStep(spec)
                 && (!spec.unit || validDisplayText(spec.unit, 16))
                 && (!spec.title || validDisplayText(spec.title, 60));
         case 'grid_shape': {
@@ -2465,6 +2479,11 @@ function renderChart(spec: z.infer<typeof barChartSchema> | z.infer<typeof lineC
     content.push(line(x, y, x, y + height, { width: 2 }));
     if (spec.title) content.push(text(400, 35, spec.title, { size: 22, maxWidth: 700 }));
     const scale = (value: number) => y + height - (value - minValue) / (maxValue - minValue) * height;
+    const axisTicks = spec.tickStep === undefined ? [] : createFigureAxisTicks(minValue, maxValue, spec.tickStep);
+    if (spec.tickStep !== undefined && (!axisTicks || axisTicks.length < 2)) return null;
+    const axisTickLayout = chartAxisTickLayout(axisTicks ?? [], x, scale);
+    if (spec.tickStep !== undefined && !axisTickLayout) return null;
+    renderChartAxisTicks(content, axisTickLayout, x);
     if (isBar) {
         const slot = width / spec.categories.length;
         const bars = values.map((value, index) => {
@@ -2505,6 +2524,7 @@ function renderChart(spec: z.infer<typeof barChartSchema> | z.infer<typeof lineC
             [],
             { left: 8, top: 8, width: 784, height: 484 },
             { fixed: [
+                ...(axisTickLayout?.boxes ?? []),
                 ...categoryBoxes.map((box) => box!),
                 ...(titleBox ? [titleBox] : []),
                 ...(unitBox ? [unitBox] : []),
@@ -2557,6 +2577,7 @@ function renderChart(spec: z.infer<typeof barChartSchema> | z.infer<typeof lineC
             [],
             { left: 8, top: 8, width: 784, height: 484 },
             { fixed: [
+                ...(axisTickLayout?.boxes ?? []),
                 ...categoryBoxes.map((box) => box!),
                 ...(titleBox ? [titleBox] : []),
                 ...(unitBox ? [unitBox] : []),
@@ -2577,6 +2598,39 @@ function renderChart(spec: z.infer<typeof barChartSchema> | z.infer<typeof lineC
     return root(content.join(''));
 }
 
+function chartAxisTickLayout(
+    ticks: readonly FigureAxisTick[],
+    axisX: number,
+    yFor: (value: number) => number,
+): { ticks: readonly FigureAxisTick[]; boxes: FigureLabelBox[] } | null {
+    if (ticks.length === 0) return null;
+    const boxes = ticks.map((tick) => chartTextBox(axisX - 12, yFor(tick.value) + 5, tick.label, 14, 72, 'end'));
+    if (boxes.some((box) => box === null)) return null;
+    const ordered = (boxes as FigureLabelBox[]).slice().sort((first, second) => first.top - second.top);
+    for (let index = 1; index < ordered.length; index += 1) {
+        const previous = ordered[index - 1]!;
+        const current = ordered[index]!;
+        if (current.top < previous.top + previous.height + 2) return null;
+    }
+    return { ticks, boxes: boxes as FigureLabelBox[] };
+}
+
+function renderChartAxisTicks(
+    content: string[],
+    layout: { ticks: readonly FigureAxisTick[]; boxes: FigureLabelBox[] } | null,
+    axisX: number,
+): void {
+    if (!layout) return;
+    layout.ticks.forEach((tick, index) => {
+        const box = layout.boxes[index]!;
+        const size = fitFontSize(tick.label, 14, 72);
+        const y = box.top + size * 1.2;
+        const tickY = y - size * 0.35;
+        content.push(line(axisX - 6, tickY, axisX, tickY, { width: 1 }));
+        content.push(text(box.left + box.width, y, tick.label, { size, maxWidth: 72, anchor: 'end' }));
+    });
+}
+
 function chartWrappedTextBox(x: number, baseline: number, value: string, size: number, maxWidth: number): FigureLabelBox | null {
     const lines = wrapTextLines(value, size, maxWidth);
     if (!wrappedLinesFit(lines, size, maxWidth)) return null;
@@ -2591,13 +2645,13 @@ function chartTextBox(
     value: string,
     size: number,
     maxWidth: number,
-    anchor: 'start' | 'middle' = 'middle',
+    anchor: 'start' | 'middle' | 'end' = 'middle',
 ): FigureLabelBox | null {
     const actualSize = fitFontSize(value, size, maxWidth);
     if (actualSize < 12) return null;
     const width = displayWidth(value) * actualSize;
     return {
-        left: anchor === 'start' ? x : x - width / 2,
+        left: anchor === 'start' ? x : anchor === 'end' ? x - width : x - width / 2,
         top: baseline - actualSize * 1.2,
         width,
         height: actualSize * 1.6,

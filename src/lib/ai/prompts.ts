@@ -258,7 +258,7 @@ export const FIGURE_SPEC_RULES = `【结构化配图优先规则】
 - 明确的长度标注必须与固定结构关系一致：正方形各边、正方体各棱相等，矩形和平行四边形的上下边相等，同圆半径相等、直径为半径两倍；直角小方框若配明确度数则必须为90度。仅在内部核对时换算单位，输出标签仍保留题目原文，不得把1分米改写成10厘米。width/height/depth/radius 等相对绘图尺寸不是物理长度，不能据此求解未知数、填作答空格或改写标注；裸数字角标可能是编号，不得擅自当作度数。结构与明确标注相互矛盾时留空 figure_spec 并回退，不猜测应修改哪一处。
 - 同圆有可比较的明确长度时，弦长不能超过直径或半径的两倍；同一对端点无论顺序如何，作为弦或直径时的明确长度必须一致。无单位值只和其它无单位值比较，不从其它标注补单位；未知值不能遮住已知长度间的矛盾。不得根据相对绘图半径、弦的角度或坐标比例推算实际长度，无法确认的表达式保留原文，不强行求值。
 - 同圆 points 中的不同 id 必须表示不同的圆周点。小幅径向坐标误差会沿原方向对齐圆周，对齐后仍不能重合或形成零长度弦，直径两端在对齐后仍须经过圆心；不能为通过校验而合并点名、删除线段或移动端点。无法确认原图中的点位关系时留空 figure_spec，使用完整旧 SVG/原图回退。
-- bar_chart/line_chart：categories 与 values 数量必须一致，数据必须逐项对应；可选 maxValue、minValue、unit、title。bar_chart 保留 0 基线，maxValue 必须覆盖所有 values，数据值必须完整保留；line_chart 的 maxValue 必须大于 minValue 且覆盖所有 values，未提供边界时不要为了好看把小数数据上限补成 1，不要把全负数数据改成正数范围。无法确认坐标范围或标注无法完整排版时留空 figure_spec。
+- bar_chart/line_chart：categories 与 values 数量必须一致，数据必须逐项对应；可选 maxValue、minValue、tickStep、unit、title。tickStep 只在原图纵轴刻度间隔清楚时填写，必须保留原图的数值间隔，无法确认时省略，不要猜测。bar_chart 保留 0 基线，maxValue 必须覆盖所有 values，数据值必须完整保留；line_chart 的 maxValue 必须大于 minValue 且覆盖所有 values，未提供边界时不要为了好看把小数数据上限补成 1，不要把全负数数据改成正数范围。无法确认坐标范围、刻度间隔或标注无法完整排版时留空 figure_spec。
 - grid_shape：rows、cols、filledCells、cellLabels、title?；行列从 0 开始，所有格子必须在网格内，同一格不能重复填色或重复标注。cellLabels 必须完整保留原有文字及所属行列，不能为了排版缩写、删字、拆到其它格子或改变行列数；程序会保持正方格、按需扩大画布，并将格内文字排成最多三行，装不下时回退。不确定的格子不要猜，无法确认整体结构时留空 figure_spec。
 - table：headers 和 rows，保留表格中可见的标题、单位和空单元格；列数、标题或单元格对应关系不确定时留空 figure_spec。
 - figure_group：{type:"figure_group",title?,compareSizes?:boolean,figures:[{label,figure}]}。compareSizes 是可选布尔值，默认 false；用于同一道题的 2~6 张独立子图或选项图；label 完整保留原图的 A/B/C/D、甲乙或图号，不能为空或重复；figures 必须按原题顺序完整列出，每个 figure 使用上面一种单图结构，不能嵌套 figure_group，不能跨子图引用点。各子图的 id 只在本图内生效，允许不同选项重复使用同一顶点字母。

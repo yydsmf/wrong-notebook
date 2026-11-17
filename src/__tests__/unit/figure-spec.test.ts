@@ -428,6 +428,44 @@ describe('structured figure specs', () => {
         }
     });
 
+    it('柱状图保留原图纵轴刻度间隔，并把刻度文字放在纵轴左侧', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'bar_chart', categories: ['甲', '乙'], values: [5, 10], tickStep: 5,
+        }));
+
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const axisLabels = Array.from(document.querySelectorAll('text')).filter((element) => (
+            element.getAttribute('text-anchor') === 'end' && element.getAttribute('x') === '88'
+        ));
+        expect(axisLabels.map((element) => element.textContent)).toEqual(['0', '5', '10']);
+        expect(axisLabels.every((element) => Number(element.getAttribute('x')) < 100)).toBe(true);
+        expect(Array.from(document.querySelectorAll('line')).some((element) => (
+            element.getAttribute('x1') === '94' && element.getAttribute('x2') === '100'
+        ))).toBe(true);
+    });
+
+    it('折线图保留小数纵轴刻度，并与数据值标签一起排版', () => {
+        const svg = renderFigureSpec(JSON.stringify({
+            type: 'line_chart', categories: ['一', '二', '三'], values: [0.2, 0.5, 0.3], maxValue: 0.5, tickStep: 0.1,
+        }));
+
+        expect(svg).not.toBeNull();
+        const document = new DOMParser().parseFromString(svg!, 'image/svg+xml');
+        const axisLabels = Array.from(document.querySelectorAll('text')).filter((element) => (
+            element.getAttribute('text-anchor') === 'end' && element.getAttribute('x') === '88'
+        ));
+        expect(axisLabels.map((element) => element.textContent)).toEqual(['0', '0.1', '0.2', '0.3', '0.4', '0.5']);
+        expect(svg).not.toMatch(/NaN|Infinity|undefined/);
+    });
+
+    it.each([
+        { type: 'bar_chart', categories: ['甲', '乙'], values: [5, 10], tickStep: 20 },
+        { type: 'line_chart', categories: ['一', '二'], values: [0, 1], tickStep: 0.01 },
+    ])('纵轴刻度少于两个或过密时回退：$type', (spec) => {
+        expect(renderFigureSpec(JSON.stringify(spec))).toBeNull();
+    });
+
     it('falls back when a chart category cannot fit within the bounded label area', () => {
         expect(renderFigureSpec(JSON.stringify({
             type: 'bar_chart',

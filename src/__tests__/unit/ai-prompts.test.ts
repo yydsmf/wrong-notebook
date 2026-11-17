@@ -401,6 +401,8 @@ describe('AI Prompts', () => {
                 expect(prompt).toContain('bar_chart 保留 0 基线');
                 expect(prompt).toContain('不要为了好看把小数数据上限补成 1');
                 expect(prompt).toContain('不要把全负数数据改成正数范围');
+                expect(prompt).toContain('tickStep 只在原图纵轴刻度间隔清楚时填写');
+                expect(prompt).toContain('无法确认时省略，不要猜测');
             }
         });
 
