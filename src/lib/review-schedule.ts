@@ -41,14 +41,16 @@ export function getReviewPlan(itemCreatedAt: Date, records: ReviewRecord[], time
     return { stage, nextReviewAt };
 }
 
-/** 学生首次当天可重做；答错当天重做，答对后依次按 1、3、7、14 天安排。 */
+/** 学生首次当天可复习；答错清零并隔天复习，答对后依次按 1、3、7、14 天安排。 */
 export function getStudentReviewPlan(itemCreatedAt: Date, records: ReviewRecord[], timeZone: string): ReviewPlan {
     const answered = records
         .filter((record) => record.result === "correct" || record.result === "wrong")
         .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
     const latest = answered.at(-1);
     if (!latest) return { stage: 0, nextReviewAt: getDayRange(itemCreatedAt, timeZone).start };
-    if (latest.result === "wrong") return { stage: 0, nextReviewAt: getDayRange(latest.createdAt, timeZone).start };
+    if (latest.result === "wrong") {
+        return { stage: 0, nextReviewAt: getDayRange(shiftCalendarDate(latest.createdAt, timeZone, 1), timeZone).start };
+    }
 
     let consecutiveCorrect = 0;
     for (let i = answered.length - 1; i >= 0 && answered[i].result === "correct"; i--) consecutiveCorrect++;

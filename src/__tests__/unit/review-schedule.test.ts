@@ -70,9 +70,9 @@ describe('isReviewDue', () => {
 });
 
 describe('getStudentReviewPlan', () => {
-    it('学生首次录入当天可复习，答错当天可重做，答对按 1、3、7、14 天推进', () => {
+    it('学生首次录入当天可复习，答错隔天复习，答对按 1、3、7、14 天推进', () => {
         expect(getStudentReviewPlan(created, [], TZ).nextReviewAt?.toISOString()).toBe('2026-09-30T16:00:00.000Z');
-        expect(getStudentReviewPlan(created, [{ result: 'wrong', createdAt: at('2026-10-05T02:00:00Z') }], TZ).nextReviewAt?.toISOString()).toBe('2026-10-04T16:00:00.000Z');
+        expect(getStudentReviewPlan(created, [{ result: 'wrong', createdAt: at('2026-10-05T02:00:00Z') }], TZ).nextReviewAt?.toISOString()).toBe('2026-10-05T16:00:00.000Z');
         expect(getStudentReviewPlan(created, [{ result: 'correct', createdAt: at('2026-10-05T02:00:00Z') }], TZ).nextReviewAt?.toISOString()).toBe('2026-10-05T16:00:00.000Z');
         expect(getStudentReviewPlan(created, [
             { result: 'correct', createdAt: at('2026-10-05T02:00:00Z') },
@@ -84,6 +84,24 @@ describe('getStudentReviewPlan', () => {
             { result: 'correct', createdAt: at('2026-10-06T02:00:00Z') },
             { result: 'correct', createdAt: at('2026-10-13T02:00:00Z') },
         ], TZ).nextReviewAt?.toISOString()).toBe('2026-10-26T16:00:00.000Z');
+    });
+
+    it('答错清零连续答对次数，次日到期，重新答对后从一天间隔开始', () => {
+        const records = [
+            { result: 'correct', createdAt: at('2026-10-02T02:00:00Z') },
+            { result: 'correct', createdAt: at('2026-10-03T02:00:00Z') },
+            { result: 'wrong', createdAt: at('2026-10-06T15:59:00Z') },
+        ];
+        const plan = getStudentReviewPlan(created, records, TZ);
+        expect(plan).toEqual({ stage: 0, nextReviewAt: at('2026-10-06T16:00:00Z') });
+        expect(isReviewDue(plan, TZ, at('2026-10-06T15:59:59Z'))).toBe(false);
+        expect(isReviewDue(plan, TZ, at('2026-10-06T16:00:00Z'))).toBe(true);
+
+        const restarted = getStudentReviewPlan(created, [
+            ...records,
+            { result: 'correct', createdAt: at('2026-10-07T02:00:00Z') },
+        ], TZ);
+        expect(restarted).toEqual({ stage: 1, nextReviewAt: at('2026-10-07T16:00:00Z') });
     });
 
     it('按连续答对次数依次使用 1、3、7、14 天间隔，完成后停止安排', () => {

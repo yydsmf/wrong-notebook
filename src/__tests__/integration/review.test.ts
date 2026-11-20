@@ -36,6 +36,7 @@ describe('GET /api/review/due', () => {
         vi.setSystemTime(new Date('2026-10-20T04:00:00Z'));
         mocks.session = { user: { id: 'user-1', email: 'user@example.com', role: 'admin' }, expires: '2099-01-01' };
         mocks.user.findMany.mockResolvedValue([]);
+        mocks.studentAnswer.findMany.mockResolvedValue([]);
         mocks.errorItem.findMany.mockImplementation(async (args: { where: { id?: { in: string[] } } }) => {
             if (!args.where.id) return candidates;
             return args.where.id.in.map((id) => ({ id, masteryProbability: null, subject: null, tags: [], _count: { practiceRecords: id === 'new' ? 0 : 1 } }));
@@ -77,17 +78,81 @@ describe('GET /api/review/due', () => {
         mocks.session = { user: { id: 'student-1', email: 'student@example.com', role: 'user' }, expires: '2099-01-01' };
         mocks.user.findMany.mockResolvedValue([{ id: 'admin-1' }]);
         mocks.studentAnswer.findMany.mockResolvedValue([
-            { errorItemId: 'old', isCorrect: true, createdAt: new Date('2026-10-19T02:00:00Z') },
+            { errorItemId: 'old', status: 'graded', isCorrect: true, createdAt: new Date('2026-10-19T02:00:00Z') },
         ]);
 
         const response = await get();
         expect(response.status).toBe(200);
         expect(mocks.studentAnswer.findMany).toHaveBeenCalledWith(expect.objectContaining({
             where: expect.objectContaining({
-                status: 'graded',
                 submission: { userId: 'student-1' },
+                OR: [
+                    { status: 'graded' },
+                    { createdAt: { gte: new Date('2026-10-19T16:00:00Z'), lt: new Date('2026-10-20T16:00:00Z') } },
+                ],
             }),
         }));
         expect((await response.json()).items.map((item: { id: string }) => item.id)).toContain('old');
+    });
+
+    it.each([
+        { status: 'graded', isCorrect: true },
+        { status: 'graded', isCorrect: false },
+        { status: 'pending', isCorrect: null },
+        { status: 'grading', isCorrect: null },
+        { status: 'failed', isCorrect: null },
+    ])('学生当天已提交的题不再返回：$status / $isCorrect', async ({ status, isCorrect }) => {
+        mocks.session!.user.role = 'user';
+        mocks.studentAnswer.findMany.mockResolvedValue([
+            { errorItemId: 'old', status, isCorrect, createdAt: new Date('2026-10-20T02:00:00Z') },
+        ]);
+
+        const data = await (await get()).json();
+
+        expect(data.items.map((item: { id: string }) => item.id)).toEqual(['fresh', 'new']);
+        expect(data.total).toBe(2);
+    });
+
+    it('答错的题当天不返回，应用时区跨日后以清零的档位返回', async () => {
+        mocks.session!.user.role = 'user';
+        mocks.studentAnswer.findMany.mockResolvedValue([
+            { errorItemId: 'old', status: 'graded', isCorrect: true, createdAt: new Date('2026-10-15T02:00:00Z') },
+            { errorItemId: 'old', status: 'graded', isCorrect: false, createdAt: new Date('2026-10-20T02:00:00Z') },
+        ]);
+        vi.setSystemTime(new Date('2026-10-20T15:59:59Z'));
+        const today = await (await get()).json();
+        expect(today.items.map((item: { id: string }) => item.id)).not.toContain('old');
+
+        vi.setSystemTime(new Date('2026-10-20T16:00:00Z'));
+        const tomorrow = await (await get()).json();
+        expect(tomorrow.items).toContainEqual(expect.objectContaining({
+            id: 'old', reviewStage: 0, nextReviewAt: '2026-10-20T16:00:00.000Z',
+        }));
+    });
+
+    it('往日待批或失败记录不推进或重置已判分的连续答对计划', async () => {
+        mocks.session!.user.role = 'user';
+        mocks.studentAnswer.findMany.mockResolvedValue([
+            { errorItemId: 'old', status: 'graded', isCorrect: true, createdAt: new Date('2026-10-17T02:00:00Z') },
+            { errorItemId: 'old', status: 'graded', isCorrect: true, createdAt: new Date('2026-10-18T02:00:00Z') },
+            { errorItemId: 'old', status: 'failed', isCorrect: null, createdAt: new Date('2026-10-19T02:00:00Z') },
+            { errorItemId: 'old', status: 'pending', isCorrect: null, createdAt: new Date('2026-10-19T03:00:00Z') },
+        ]);
+
+        const data = await (await get()).json();
+        expect(data.items.map((item: { id: string }) => item.id)).not.toContain('old');
+    });
+
+    it.each([
+        { createdAt: '2026-10-19T15:59:59Z', due: true },
+        { createdAt: '2026-10-19T16:00:00Z', due: false },
+    ])('当天提交按应用时区而非 UTC 日期判断：$createdAt', async ({ createdAt, due }) => {
+        mocks.session!.user.role = 'user';
+        mocks.studentAnswer.findMany.mockResolvedValue([
+            { errorItemId: 'old', status: 'graded', isCorrect: false, createdAt: new Date(createdAt) },
+        ]);
+
+        const data = await (await get()).json();
+        expect(data.items.some((item: { id: string }) => item.id === 'old')).toBe(due);
     });
 });

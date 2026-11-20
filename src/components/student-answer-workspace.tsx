@@ -20,7 +20,6 @@ interface StudentAnswerWorkspaceProps {
     questions: StudentAnswerQuestion[];
     examPaperId?: string;
     initialSubmission?: StudentSubmission | null;
-    onContinueReview?: () => void;
     onSubmissionUpdate?: (submission: StudentSubmission) => void;
 }
 
@@ -34,17 +33,28 @@ function hasAnswer(answer?: DraftAnswer) {
     return Boolean(answer?.text.trim() || answer?.image);
 }
 
-export function StudentAnswerWorkspace({ kind, questions, examPaperId, initialSubmission = null, onContinueReview, onSubmissionUpdate }: StudentAnswerWorkspaceProps) {
+export function StudentAnswerWorkspace({ kind, questions, examPaperId, initialSubmission = null, onSubmissionUpdate }: StudentAnswerWorkspaceProps) {
     const { t } = useLanguage();
     const [drafts, setDrafts] = useState<Record<string, DraftAnswer>>({});
-    const [submission, setSubmission] = useState<StudentSubmission | null>(() => initialSubmission);
+    const [storedSubmission, setSubmission] = useState<StudentSubmission | null>(() => initialSubmission);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [retrying, setRetrying] = useState(false);
+    const submission = storedSubmission && (
+        kind === "exam" || questions.length === 0
+        || questions.some((question) => storedSubmission.answers.some((answer) => answer.errorItemId === question.id))
+    ) ? storedSubmission : null;
+    const canAnswer = kind === "exam" || !submission;
     const answersComplete = questions.length > 0 && questions.every((question) => hasAnswer(drafts[question.id]));
     const resultByQuestion = useMemo(() => new Map(
         (submission?.answers ?? []).map((answer) => [answer.errorItemId || answer.examQuestionId || "", answer]),
     ), [submission]);
+
+    useEffect(() => {
+        if (!storedSubmission || submission) return;
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- 到期题批次改变后清除上一批提交，避免旧题再次到期时恢复旧答案。
+        setSubmission(null);
+    }, [storedSubmission, submission]);
 
     const loadSubmission = useCallback(async (submissionId: string) => {
         try {
@@ -57,7 +67,7 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId, initialSu
     }, [onSubmissionUpdate]);
 
     useEffect(() => {
-        // 复习每次进入都从新作答开始；只有试卷恢复最近一次提交。
+        // 复习详情由页面显式传入；只有试卷自动恢复最近一次提交。
         if (kind !== "exam" || !examPaperId) return;
         let cancelled = false;
         const query = new URLSearchParams({ kind, examPaperId });
@@ -95,7 +105,7 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId, initialSu
     };
 
     const submit = async () => {
-        if (!answersComplete || submitting || Object.values(drafts).some((answer) => answer.processing)) return;
+        if (!canAnswer || !answersComplete || submitting || Object.values(drafts).some((answer) => answer.processing)) return;
         setSubmitting(true);
         setError(null);
         try {
@@ -157,7 +167,7 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId, initialSu
                             {(question.figureSvg || fragments.length > 0) && (
                                 <QuestionFigure svg={question.figureSvg} images={fragments} scale={question.figureScale} align={question.figureAlign} />
                             )}
-                            {mode !== "written" && (
+                            {canAnswer && mode !== "written" && (
                                 <div role="radiogroup" aria-label={t.studentAnswer.selectOption} className="grid gap-2 sm:grid-cols-2">
                                     {(question.options || []).map((option) => {
                                         const selected = draft.text === option.value;
@@ -178,7 +188,7 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId, initialSu
                                 </div>
                             )}
 
-                            {mode === "written" && (
+                            {canAnswer && mode === "written" && (
                                 <div className="space-y-3">
                                     <label className="block space-y-2 text-sm font-medium">
                                         <span>{t.studentAnswer.writeAnswer}</span>
@@ -283,7 +293,7 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId, initialSu
                 );
             })}
 
-            {questions.length > 0 && <div className="space-y-3 border-t pt-4">
+            {canAnswer && questions.length > 0 && <div className="space-y-3 border-t pt-4">
                 {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
                 <Button className="w-full sm:w-auto" onClick={() => void submit()} disabled={!answersComplete || submitting || submission?.status === "grading" || Object.values(drafts).some((answer) => answer.processing)}>
                     {submitting ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
@@ -363,12 +373,6 @@ export function StudentAnswerWorkspace({ kind, questions, examPaperId, initialSu
                             </CardContent>
                         </Card>
                     ))}
-                    {onContinueReview && (
-                        <Button variant="outline" onClick={onContinueReview}>
-                            <RotateCcw className="size-4" />
-                            {t.studentAnswer.continueReview}
-                        </Button>
-                    )}
                 </section>
             )}
         </div>

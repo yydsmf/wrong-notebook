@@ -17,7 +17,7 @@ import { DEFAULT_PAGE_SIZE } from "@/lib/constants/pagination";
 import { formatDateTime, getDayRange } from "@/lib/date-time";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { usePageTitle } from "@/lib/page-title";
-import { REVIEW_INTERVALS, STUDENT_REVIEW_INTERVALS } from "@/lib/review-schedule";
+import { REVIEW_INTERVALS } from "@/lib/review-schedule";
 import type { DueReviewItem, PaginatedResponse, StudentAnswerQuestion, StudentSubmission } from "@/types/api";
 
 export default function ReviewPage() {
@@ -27,9 +27,7 @@ export default function ReviewPage() {
     usePageTitle(t.review.title);
     const [data, setData] = useState<PaginatedResponse<DueReviewItem> | null>(null);
     const [latestSubmission, setLatestSubmission] = useState<StudentSubmission | null>(null);
-    const [submittedSubmissionId, setSubmittedSubmissionId] = useState<string | null>(null);
     const [page, setPage] = useState(1);
-    const [continueReview, setContinueReview] = useState(false);
 
     const role = session?.user?.role;
     const reviewPageSize = role === "user" ? 1000 : DEFAULT_PAGE_SIZE;
@@ -54,8 +52,7 @@ export default function ReviewPage() {
 
     const handleSubmissionUpdate = useCallback((submission: StudentSubmission) => {
         setLatestSubmission(submission);
-        setSubmittedSubmissionId(submission.id);
-        if (submission.status !== "grading") void fetchDue(1);
+        void fetchDue(1);
     }, [fetchDue]);
 
     useEffect(() => {
@@ -73,17 +70,7 @@ export default function ReviewPage() {
     }, [page, fetchDue]);
 
     const todayStart = getDayRange(new Date(), timeZone).start;
-    const todayEnd = getDayRange(new Date(), timeZone).end;
-    const latestAnswers = new Set(latestSubmission?.answers.flatMap((answer) => answer.errorItemId ? [answer.errorItemId] : []) ?? []);
-    const latestCoversDueToday = Boolean(
-        session?.user?.role === "user"
-        && data?.items.length
-        && latestSubmission?.kind === "review"
-        && new Date(latestSubmission.createdAt) >= todayStart
-        && new Date(latestSubmission.createdAt) < todayEnd
-        && data.items.every((item) => latestAnswers.has(item.id)),
-    );
-    const showLatestResult = data?.items.length === 0 || (latestCoversDueToday && submittedSubmissionId === latestSubmission?.id && !continueReview);
+    const showLatestResult = data?.items.length === 0;
     const dueLabel = (item: DueReviewItem) => {
         const date = formatDateTime(item.nextReviewAt, "MM/dd", timeZone);
         return new Date(item.nextReviewAt) < todayStart
@@ -127,7 +114,7 @@ export default function ReviewPage() {
                                 <ErrorItemCard item={item} selectMode={false} selected={false} onToggleSelect={() => {}} selectedTag={null} onTagClick={() => {}} />
                             </div>
                             <div className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
-                                <span>{dueLabel(item)} · {t.review.round.replace("{round}", String(item.reviewStage + 1)).replace("{total}", String(session?.user?.role === "user" ? STUDENT_REVIEW_INTERVALS.length : REVIEW_INTERVALS.length))}</span>
+                                <span>{dueLabel(item)} · {t.review.round.replace("{round}", String(item.reviewStage + 1)).replace("{total}", String(REVIEW_INTERVALS.length))}</span>
                                 <Link href={`/practice?id=${item.id}`}>
                                     <Button variant="outline" size="sm" className="h-8">
                                         <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
@@ -159,10 +146,10 @@ export default function ReviewPage() {
 
             {data && session?.user?.role === "user" && showLatestResult && latestSubmission && (
                 <StudentAnswerWorkspace
+                    key={latestSubmission.id}
                     kind="review"
                     questions={[]}
                     initialSubmission={latestSubmission}
-                    onContinueReview={data.items.length > 0 && latestCoversDueToday ? () => setContinueReview(true) : undefined}
                     onSubmissionUpdate={handleSubmissionUpdate}
                 />
             )}

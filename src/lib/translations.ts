@@ -160,7 +160,6 @@ export const translations = {
             removeImage: "Remove image",
             submitError: "Answers could not be submitted. Please try again.",
             retryGrading: "Retry failed grading",
-            continueReview: "Review due questions again",
         },
         theme: {
             toggle: "Theme",
@@ -1675,7 +1674,6 @@ export const translations = {
             removeImage: "移除图片",
             submitError: "提交失败，请重试。",
             retryGrading: "重试未完成的批改",
-            continueReview: "继续复习到期题目",
         },
         theme: {
             toggle: "主题",

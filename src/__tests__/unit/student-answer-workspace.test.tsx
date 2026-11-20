@@ -193,7 +193,7 @@ describe("复习作答批次", () => {
         expect(host.textContent).not.toContain("回答错误");
     });
 
-    it("提交后只按新提交编号读取结果，重新进入后恢复空白作答", async () => {
+    it("提交后只显示本次结果并收起答题入口，新的到期题仍可空白作答", async () => {
         await renderWorkspace();
         await submitAnswers();
 
@@ -203,15 +203,20 @@ describe("复习作答批次", () => {
         });
         expect(mocks.get).toHaveBeenCalledExactlyOnceWith("/api/student-submissions/submission-1");
         expectRenderedReferenceMath();
+        expect(host.querySelector("textarea")).toBeNull();
+        expect(host.textContent).not.toContain("提交今日复习");
+        expect(host.textContent).not.toContain("继续复习到期题目");
 
-        await act(async () => root.unmount());
-        root = createRoot(host);
-        await renderWorkspace();
+        await renderWorkspace("review", [{ id: "question-2", questionText: "新的到期题" }]);
 
         expect(mocks.get).toHaveBeenCalledTimes(1);
         expect(host.querySelector("textarea")?.value).toBe("");
         expect(host.textContent).not.toContain("我的答案");
         expect(host.textContent).not.toContain("参考答案");
+
+        await renderWorkspace();
+        expect(host.querySelector("textarea")?.value).toBe("");
+        expect(host.textContent).not.toContain("我的答案");
     });
 
     it("批改进度不变或查询短暂失败时仍继续轮询本次提交", async () => {

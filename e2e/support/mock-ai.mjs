@@ -37,13 +37,13 @@ export async function startMockAI() {
                     const chunks = [];
                     for await (const chunk of request) chunks.push(chunk);
                     const patch = JSON.parse(Buffer.concat(chunks).toString() || '{}');
-                    const state = cases.get(id) || { id, calls: [], inflight: 0, held: [], partial: false, gradeError: false, hold: false, masteryProbability: 30 };
+                    const state = cases.get(id) || { id, calls: [], inflight: 0, held: [], partial: false, gradeError: false, gradeCorrect: true, hold: false, masteryProbability: 30 };
                     // 控制接口只更新声明的标量字段，保持内部集合及对象原型不受请求体影响。
-                    const allowed = new Set(['partial', 'gradeError', 'hold', 'masteryProbability', 'title', 'retry']);
+                    const allowed = new Set(['partial', 'gradeError', 'gradeCorrect', 'hold', 'masteryProbability', 'title', 'retry']);
                     if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some((key) => !allowed.has(key))) {
                         return json(response, 400, { error: '不支持的场景控制字段' });
                     }
-                    if (['partial', 'gradeError', 'hold'].some((key) => patch[key] !== undefined && typeof patch[key] !== 'boolean') ||
+                    if (['partial', 'gradeError', 'gradeCorrect', 'hold'].some((key) => patch[key] !== undefined && typeof patch[key] !== 'boolean') ||
                         (patch.masteryProbability !== undefined && (!Number.isFinite(patch.masteryProbability) || patch.masteryProbability < 0 || patch.masteryProbability > 100)) ||
                         (patch.title !== undefined && (typeof patch.title !== 'string' || patch.title.length > 500)) ||
                         (patch.retry !== undefined && (!Number.isInteger(patch.retry) || patch.retry < 0))) {
@@ -51,6 +51,7 @@ export async function startMockAI() {
                     }
                     if (patch.partial !== undefined) state.partial = patch.partial;
                     if (patch.gradeError !== undefined) state.gradeError = patch.gradeError;
+                    if (patch.gradeCorrect !== undefined) state.gradeCorrect = patch.gradeCorrect;
                     if (patch.hold !== undefined) state.hold = patch.hold;
                     if (patch.masteryProbability !== undefined) state.masteryProbability = patch.masteryProbability;
                     if (patch.title !== undefined) state.title = patch.title;
@@ -98,7 +99,7 @@ export async function startMockAI() {
                 }
                 let payload;
                 if (operation === 'mastery') payload = { probability: state.masteryProbability, reason: '测试夹具的固定掌握评估' };
-                else if (operation === 'grade') payload = { correct: true, reason: '测试夹具判定：结论及论证完整' };
+                else if (operation === 'grade') payload = { correct: state.gradeCorrect, reason: state.gradeCorrect ? '测试夹具判定：结论及论证完整' : '测试夹具判定：计算结果错误' };
                 else if (operation === 'grade-recognition') payload = { gradeSemester: '初二上' };
                 else payload = {
                     questionText: operation === 'analysis' ? `求解方程 x + 2 = 5。${marker}` : `证明两个连续整数之和为奇数，并说明理由。${marker}变式`,

@@ -4,6 +4,7 @@ import { internalError, unauthorized } from "@/lib/api-errors";
 import { authOptions } from "@/lib/auth";
 import { getAppTimeZone } from "@/lib/config";
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE } from "@/lib/constants/pagination";
+import { getDayRange } from "@/lib/date-time";
 import { createLogger } from "@/lib/logger";
 import { getMasteryThreshold } from "@/lib/mastery";
 import { PRACTICE_RECORD_COUNT, masteryStatusOf } from "@/lib/mastery-status";
@@ -29,6 +30,7 @@ export async function GET(req: Request) {
         const timeZone = getAppTimeZone();
         const now = new Date();
         if (session.user.role === "user") {
+            const today = getDayRange(now, timeZone);
             const admins = await prisma.user.findMany({ where: { role: "admin", isActive: true }, select: { id: true } });
             const adminIds = admins.map((admin) => admin.id);
             const candidates = await prisma.errorItem.findMany({
@@ -43,20 +45,27 @@ export async function GET(req: Request) {
             const history = candidates.length > 0 ? await prisma.studentAnswer.findMany({
                 where: {
                     errorItemId: { in: candidates.map((item) => item.id) },
-                    status: "graded",
                     submission: { userId: session.user.id },
+                    OR: [
+                        { status: "graded" },
+                        { createdAt: { gte: today.start, lt: today.end } },
+                    ],
                 },
-                select: { errorItemId: true, isCorrect: true, createdAt: true },
+                select: { errorItemId: true, isCorrect: true, status: true, createdAt: true },
                 orderBy: [{ createdAt: "asc" }, { id: "asc" }],
             }) : [];
             const historyByItem = new Map<string, { result: string; createdAt: Date }[]>();
+            const submittedToday = new Set<string>();
             for (const record of history) {
                 if (!record.errorItemId) continue;
+                // 当天已提交的题统一留在批改详情中，待批或失败也不要求重新作答。
+                if (record.createdAt >= today.start && record.createdAt < today.end) submittedToday.add(record.errorItemId);
+                if (record.status !== "graded") continue;
                 const records = historyByItem.get(record.errorItemId) ?? [];
                 records.push({ result: record.isCorrect ? "correct" : "wrong", createdAt: record.createdAt });
                 historyByItem.set(record.errorItemId, records);
             }
-            const due = candidates.map((item) => ({
+            const due = candidates.filter((item) => !submittedToday.has(item.id)).map((item) => ({
                 id: item.id,
                 plan: getStudentReviewPlan(item.createdAt, historyByItem.get(item.id) ?? [], timeZone),
             })).filter(({ plan }) => isReviewDue(plan, timeZone, now))
